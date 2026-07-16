@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+data/*.json
+data/*.tmp
+.DS_Store
+.vercel/
+*.log
+service-account.json

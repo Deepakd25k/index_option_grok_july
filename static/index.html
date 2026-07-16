@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Index Data Auto — Column Sheet</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* Force panel visibility — overrides any cache/specificity issues */
+    .panel { display: none !important; }
+    .panel.active { display: block !important; }
+    .tab { cursor: pointer; user-select: none; }
+    .tab.active { outline: 2px solid #1a73e8; }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="logo">📊</span>
+      <div>
+        <h1>Index_Data_Auto</h1>
+        <p class="sub">Column-wise · NSE FII OI (qty + %) · Europe · zero manual</p>
+      </div>
+    </div>
+    <div class="actions">
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="sheet" onclick="switchTab('sheet')">Sheet</button>
+        <button type="button" class="tab" data-tab="oi" onclick="switchTab('oi')">FII OI</button>
+        <button type="button" class="tab" data-tab="history" onclick="switchTab('history')">Daily Log</button>
+        <button type="button" class="tab" data-tab="docs" onclick="switchTab('docs')">Significance</button>
+      </nav>
+      <span id="status" class="pill">Loading…</span>
+      <button type="button" id="btnRefresh" class="btn primary">↻ Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="panel-sheet" class="panel active" role="tabpanel">
+      <div class="meta grid4">
+        <div class="card"><label>Last updated</label><div id="lastUpdated" class="val">—</div></div>
+        <div class="card"><label>Date / Day</label><div id="dateDay" class="val">—</div></div>
+        <div class="card"><label>Trading day?</label><div id="trading" class="val">—</div></div>
+        <div class="card"><label>Sources</label><div id="sources" class="val small">—</div></div>
+      </div>
+
+      <div class="highlights grid4">
+        <div class="card hl">
+          <label>Expected Gap</label>
+          <div class="big" id="gapPts">—</div>
+          <div class="muted" id="gapPct">—</div>
+          <div class="tag" id="gapCat">—</div>
+        </div>
+        <div class="card hl gift">
+          <label>GIFT Nifty</label>
+          <div class="big" id="gift">—</div>
+          <div class="muted">auto · Upstox</div>
+        </div>
+        <div class="card hl">
+          <label>FII / DII Cash ₹Cr</label>
+          <div class="big dual"><span id="fii">—</span><span class="sep">/</span><span id="dii">—</span></div>
+        </div>
+        <div class="card hl">
+          <label>FII Idx Fut L / S</label>
+          <div class="big dual smallish"><span id="futL">—</span></div>
+          <div class="muted" id="futS">—</div>
+        </div>
+      </div>
+
+      <div id="groups"></div>
+    </section>
+
+    <section id="panel-oi" class="panel" role="tabpanel">
+      <div class="meta grid4" style="margin-bottom:12px">
+        <div class="card hl">
+          <label>Bias accuracy (Net L−S → next day)</label>
+          <div class="big" id="biasAcc">—</div>
+          <div class="muted" id="biasHits">—</div>
+        </div>
+        <div class="card hl">
+          <label>Flow accuracy (ΔNet → next day)</label>
+          <div class="big" id="flowAcc">—</div>
+          <div class="muted" id="flowHits">—</div>
+        </div>
+        <div class="card">
+          <label>How match works</label>
+          <div class="val small" id="matchExplain">OI of day T (evening) scored vs next session Nifty direction.</div>
+        </div>
+        <div class="card">
+          <label>FII only</label>
+          <div class="val small">DII / Pro / Client hidden. Long/Short as contracts ( % of FII book ).</div>
+        </div>
+      </div>
+
+      <div class="sheet-wrap">
+        <div class="sheet-title">FII Index Futures OI · last ~1 week trend + next-day match</div>
+        <p class="note" id="oiMeta">Report ~7:00–7:30 PM IST · NSE fao_participant_oi</p>
+        <div class="table-scroll">
+          <table class="sheet compact" id="oiTable">
+            <thead>
+              <tr>
+                <th>OI Date (T)</th>
+                <th>Long (n / %)</th>
+                <th>Short (n / %)</th>
+                <th>Net L−S</th>
+                <th>Δ Long</th>
+                <th>Δ Short</th>
+                <th>Δ Net</th>
+                <th>Bias signal</th>
+                <th>Flow signal</th>
+                <th>Next day</th>
+                <th>Nifty next %</th>
+                <th>Bias match</th>
+                <th>Flow match</th>
+              </tr>
+            </thead>
+            <tbody id="oiRows"></tbody>
+          </table>
+        </div>
+        <p class="note" id="oiLegend">
+          <strong>Bias:</strong> Net&gt;0 BULLISH (expect UP next day), Net&lt;0 BEARISH (expect DOWN).
+          <strong>Flow:</strong> ΔNet&gt;0 covering/bullish, ΔNet&lt;0 adding short/bearish.
+          <strong>Match:</strong> signal direction == next session Nifty close direction.
+        </p>
+      </div>
+    </section>
+
+    <section id="panel-history" class="panel" role="tabpanel">
+      <div class="sheet-wrap">
+        <div class="sheet-title">Daily Log · column-wise (scroll →)</div>
+        <div class="table-scroll">
+          <table class="sheet compact" id="histTable">
+            <thead id="histHead"></thead>
+            <tbody id="histRows"></tbody>
+          </table>
+        </div>
+        <p class="note" id="retentionNote"></p>
+      </div>
+    </section>
+
+    <section id="panel-docs" class="panel" role="tabpanel">
+      <div class="sheet-wrap docs">
+        <div class="sheet-title">Significance · kab kya dekhna</div>
+        <div id="docsBody" class="docs-body">Loading guide…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    NSE OI CSV free · Yahoo Europe free · Upstox GIFT · Local JSON history (90d → weekly) · no Google bill
+  </footer>
+  <!-- cache-bust so browser loads new JS -->
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>
