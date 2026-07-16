@@ -138,6 +138,44 @@ table.sheet.compact td, table.sheet.compact th { padding: 5px 7px; font-size: 11
   overflow-x: auto; font-size: 12px;
 }
 
+/* ── OI chain Call | Strike | Put ─────────────────────────── */
+.oi-board .oi-legend { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 8px; }
+.oi-board .lg {
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+}
+.oi-board .lg.atm { background: #fef08a; color: #713f12; }
+.oi-board .lg.support { background: #bbf7d0; color: #14532d; }
+.oi-board .lg.resist { background: #fecaca; color: #7f1d1d; }
+.oi-board .lg.maxpain { background: #e9d5ff; color: #581c87; }
+.oi-read {
+  padding: 10px 14px; font-size: 12.5px; line-height: 1.5;
+  background: #f8fafc; border-bottom: 1px solid var(--border);
+}
+.oi-read .muted { color: #64748b; font-size: 11.5px; margin-top: 4px; }
+table.oi-chain th.ce, table.oi-chain td.ce { background: #fff7ed; text-align: right; }
+table.oi-chain th.pe, table.oi-chain td.pe { background: #eff6ff; text-align: left; }
+table.oi-chain th.mid, table.oi-chain td.mid {
+  text-align: center; font-weight: 700; min-width: 100px;
+  background: #f1f5f9;
+}
+.strike-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.strike-cell .stk { font-size: 13px; }
+.strike-cell .stk-mark {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 3px;
+}
+.strike-cell.atm { background: #fef08a; border-radius: 6px; padding: 4px; }
+.strike-cell.atm .stk-mark { background: #ca8a04; color: #fff; }
+.strike-cell.support { background: #86efac; border-radius: 6px; padding: 4px; }
+.strike-cell.support .stk-mark { background: #15803d; color: #fff; }
+.strike-cell.resist { background: #fca5a5; border-radius: 6px; padding: 4px; }
+.strike-cell.resist .stk-mark { background: #b91c1c; color: #fff; }
+.strike-cell.maxpain { box-shadow: inset 0 0 0 2px #a855f7; border-radius: 6px; padding: 4px; }
+.strike-cell.maxpain .stk-mark { background: #7e22ce; color: #fff; }
+tr.row-atm { background: #fffbeb !important; }
+tr.row-support { background: #f0fdf4 !important; }
+tr.row-resist { background: #fef2f2 !important; }
+
 /* ── Playbook conclusion cards ────────────────────────────── */
 .playbook {
   border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;

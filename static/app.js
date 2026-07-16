@@ -267,28 +267,128 @@ function renderLive(data) {
     }
   );
 
+  // OI board readout drives live playbook
+  const boards = ((data.pro_edge || {}).oi_board || {}).boards || [];
+  const niftyBoard = boards.find((b) => b.label === "Nifty" && b.ok);
   const c =
     data.fii_conclusion ||
     (data.pro_edge && data.pro_edge.fii_conclusion) ||
     {};
   const pb = el("livePlaybook");
   if (pb) {
-    pb.className = "playbook " + (c.color || "neutral");
+    const read = (niftyBoard && niftyBoard.read) || {};
+    const bias = read.bias || c.bias || "RANGE";
+    pb.className =
+      "playbook " +
+      (bias.includes("BOUNCE") || bias.includes("SUPPORT")
+        ? "bull"
+        : bias.includes("REJECT") || bias.includes("CAP")
+          ? "bear"
+          : c.color || "neutral");
     setText(
       "livePlayHead",
-      c.bias
-        ? `Scalp bias: ${c.bias} · aim 25–35 pts`
-        : "Scalp: wait structure + ORB"
+      read.headline ||
+        (c.bias ? `Scalp: ${c.bias} · 25–35 pts` : "OI board loading…")
     );
-    setText("livePlayBody", c.plan_live || "Use ATM±3 table below · fade walls · ORB break only with volume");
+    setText(
+      "livePlayBody",
+      (read.what_next || c.plan_live || "") +
+        (read.what_now ? " · " + read.what_now : "")
+    );
   }
 
-  // ATM±3 tables on Live for scalp
-  renderAtmTables("liveAtmHost", data);
+  renderOiBoard("liveAtmHost", data);
   const orb = proBlocksBySection(data, (s) =>
     /futures ORB|ORB & futures|Index futures ORB/i.test(s)
   );
   renderEdgeBlocksInto("liveOrbBlocks", orb);
+}
+
+/** Classic Call | Strike | Put board — only Live Market */
+function renderOiBoard(hostId, data) {
+  const host = el(hostId);
+  if (!host) return;
+  host.innerHTML = "";
+  const boards = ((data.pro_edge || {}).oi_board || {}).boards || [];
+  if (!boards.length) {
+    host.innerHTML =
+      '<div class="edge-empty">OI chain: set UPSTOX_ACCESS_TOKEN + Refresh. Call left · Strike middle · Put right.</div>';
+    return;
+  }
+
+  boards.forEach((b) => {
+    const wrap = document.createElement("div");
+    wrap.className = "sheet-wrap oi-board";
+    wrap.style.marginBottom = "16px";
+
+    if (!b.ok) {
+      wrap.innerHTML = `<div class="sheet-title">${b.label}</div><div class="edge-empty">${b.error || "No chain"}</div>`;
+      host.appendChild(wrap);
+      return;
+    }
+
+    const read = b.read || {};
+    wrap.innerHTML = `
+      <div class="sheet-title">
+        ${b.label} · Spot ${b.spot != null ? Number(b.spot).toFixed(2) : "—"}
+        · exp ${b.expiry || "—"} · PCR ${b.pcr ?? "—"}
+        <div class="oi-legend">
+          <span class="lg atm">ATM</span>
+          <span class="lg support">Support (put wall)</span>
+          <span class="lg resist">Resist (call wall)</span>
+          <span class="lg maxpain">Max pain</span>
+        </div>
+      </div>
+      <div class="oi-read">
+        <div><strong>Ab kya:</strong> ${read.what_now || "—"}</div>
+        <div><strong>Aage plan (25–35 pt):</strong> ${read.what_next || "—"}</div>
+        <div class="muted">Day OI Δ — CE ${b.tot_ce_day || "—"} · PE ${b.tot_pe_day || "—"}</div>
+      </div>
+      <div class="table-scroll">
+        <table class="sheet compact oi-chain">
+          <thead>
+            <tr>
+              <th class="ce">CE OI</th>
+              <th class="ce">CE Δ day</th>
+              <th class="ce">CE LTP</th>
+              <th class="mid">STRIKE</th>
+              <th class="pe">PE LTP</th>
+              <th class="pe">PE Δ day</th>
+              <th class="pe">PE OI</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="note">ATM row pe 5/15/30m OI change tooltips · Green strike = strong support · Red = strong resistance · Purple mark = max pain</p>
+    `;
+    const tb = wrap.querySelector("tbody");
+    (b.rows || []).forEach((r) => {
+      const tr = document.createElement("tr");
+      if (r.mark_class) tr.className = "row-" + r.mark_class.split(" ")[0];
+      const marks = (r.marks || []).join(" · ");
+      const strikeCell = `
+        <div class="strike-cell ${r.mark_class || ""}">
+          <span class="stk">${Number(r.strike).toLocaleString("en-IN")}</span>
+          ${marks ? `<span class="stk-mark">${marks}</span>` : ""}
+        </div>`;
+      const tip =
+        r.ce_oi_5m || r.pe_oi_5m
+          ? `title="ATM windows — CE OI 5m ${r.ce_oi_5m || "—"} · 15m ${r.ce_oi_15m || "—"} · 30m ${r.ce_oi_30m || "—"} | PE OI 5m ${r.pe_oi_5m || "—"} · 15m ${r.pe_oi_15m || "—"} · 30m ${r.pe_oi_30m || "—"}"`
+          : "";
+      tr.innerHTML = `
+        <td class="ce col-val ${clsFromDisplay(String(r.ce_oi_day), null)}">${r.ce_oi != null ? Number(r.ce_oi).toLocaleString("en-IN") : "—"}</td>
+        <td class="ce col-val ${clsFromDisplay(String(r.ce_oi_day), null)}">${r.ce_oi_day || "—"}</td>
+        <td class="ce">${r.ce_ltp != null ? Number(r.ce_ltp).toFixed(2) : "—"}</td>
+        <td class="mid" ${tip}>${strikeCell}</td>
+        <td class="pe">${r.pe_ltp != null ? Number(r.pe_ltp).toFixed(2) : "—"}</td>
+        <td class="pe col-val ${clsFromDisplay(String(r.pe_oi_day), null)}">${r.pe_oi_day || "—"}</td>
+        <td class="pe col-val ${clsFromDisplay(String(r.pe_oi_day), null)}">${r.pe_oi != null ? Number(r.pe_oi).toLocaleString("en-IN") : "—"}</td>
+      `;
+      tb.appendChild(tr);
+    });
+    host.appendChild(wrap);
+  });
 }
 
 function renderFii(data) {
@@ -423,20 +523,15 @@ async function loadStructureDiag() {
 
 function renderStructure(data) {
   loadStructureDiag();
+  // Only summary — full Call|Strike|Put board is on Live Market only
   const blocks = proBlocksBySection(data, (s) =>
-    /Option structure/i.test(s)
+    /OI snapshot|Option structure/i.test(s)
   );
   renderEdgeBlocksInto("structureBlocks", blocks);
-  renderAtmTables("structureAtm", data);
-  // ensure host exists
-  if (!el("structureAtm")) {
-    const panel = el("panel-structure");
-    if (panel) {
-      const h = document.createElement("div");
-      h.id = "structureAtm";
-      panel.appendChild(h);
-      renderAtmTables("structureAtm", data);
-    }
+  const atm = el("structureAtm");
+  if (atm) {
+    atm.innerHTML =
+      '<div class="edge-empty"><strong>Full OI chain (Call | Strike | Put)</strong> ab sirf <em>Live Market</em> tab pe hai — ATM / Support green / Resist red / Max pain mark ke saath.</div>';
   }
 }
 

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from app import upstox_api as ux
 from app.fii_conclusion import build_fii_conclusion
+from app.oi_board import build_chain_board
 from app.nse_oi import download_oi_for_date, enrich_participant, parse_participant_csv
 
 log = logging.getLogger(__name__)
@@ -635,28 +636,57 @@ def build_pro_edge(context: dict[str, Any] | None = None) -> dict[str, Any]:
     # don't ship full series to frontend JSON (size)
     fii_block.pop("series", None)
 
-    opt_block = build_upstox_option_structure()
+    # Full Call|Strike|Put board lives only on Live Market (not Structure)
+    oi_board = build_chain_board(band=3)
     orb_block = build_futures_orb()
     score_block = build_scorecard(fii_week)
+
+    # Structure tab: only short summary cards (no full chain table)
+    struct_summary_cards = []
+    for b in oi_board.get("boards") or []:
+        if not b.get("ok"):
+            continue
+        struct_summary_cards.append(
+            {
+                "id": f"sum_{b['label']}",
+                "title": f"{b['label']} walls",
+                "value": f"S {b.get('pe_wall')} · ATM {b.get('atm')} · R {b.get('ce_wall')} · MP {b.get('max_pain')}",
+                "meaning": b.get("read", {}).get("what_now") or "",
+                "why": b.get("read", {}).get("what_next") or "",
+                "signal": b.get("read", {}).get("bias") or "",
+            }
+        )
+    struct_block = {
+        "section": "OI snapshot (detail on Live Market)",
+        "cards": struct_summary_cards
+        or [
+            {
+                "id": "struct_move",
+                "title": "Full OI chain",
+                "value": "See Live Market tab",
+                "meaning": "Call | Strike | Put board with ATM / Support / Resist / Max pain.",
+                "why": "Ek hi jagah — Live — taaki clutter na ho.",
+                "signal": "",
+            }
+        ],
+        "note": "Full chain table only under Live Market",
+    }
 
     signals = []
     if conclusion.get("headline"):
         signals.append(conclusion["headline"])
-    for block in (fii_block, opt_block, orb_block):
-        for c in block.get("cards") or []:
-            if c.get("signal"):
-                signals.append(f"{c['title']}: {c['signal']}")
+    for b in oi_board.get("boards") or []:
+        if b.get("read", {}).get("headline"):
+            signals.append(b["read"]["headline"])
 
     pe = {
         "built_at": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S IST"),
-        "headline": "Pro Edge — FII only",
-        "blurb": (
-            "FII conclusion first · book details · Upstox ATM±3 OI/premium windows · "
-            "futures ORB · hit-rate. No tape duplicates."
-        ),
+        "headline": "FII + Live OI board",
+        "blurb": "FII conclusion · Live Call|Strike|Put chain · ORB",
         "active_signals": signals[:10],
         "fii_conclusion": conclusion,
-        "blocks": [fii_block, opt_block, orb_block, score_block],
-        "underlyings": opt_block.get("underlyings") or [],
+        "oi_board": oi_board,
+        "blocks": [fii_block, struct_block, orb_block, score_block],
+        "underlyings": [],  # chain moved to oi_board
     }
     return pe
