@@ -414,6 +414,23 @@ def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any
             tot_pe_d,
         )
 
+        # Sticky R/S strength (15m+30m OI, hysteresis, hold — not 5m flicker)
+        try:
+            from app.rs_strength import evaluate_board
+
+            rs = evaluate_board(label, table, ce_wall, pe_wall, spot)
+            # fold into readout plan line
+            if rs.get("plan"):
+                read["what_next"] = rs["plan"]
+                r_l = (rs.get("resistance") or {}).get("label")
+                s_l = (rs.get("support") or {}).get("label")
+                if r_l or s_l:
+                    read["bias"] = f"R:{r_l or '—'} S:{s_l or '—'}"
+                    read["headline"] = f"{label}: R {r_l or '—'} · S {s_l or '—'}"
+        except Exception as e:
+            log.warning("rs_strength %s: %s", label, e)
+            rs = {"ok": False, "error": str(e)}
+
         # Clock times from ATM row (e.g. 13:25 vs 13:41)
         time_labels = {
             "now": "now",
@@ -449,6 +466,7 @@ def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any
                 "tot_pe_day": _chg_str(tot_pe_d),
                 "time_labels": time_labels,
                 "read": read,
+                "rs": rs,
                 "rows": table,
             }
         )

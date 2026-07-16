@@ -445,6 +445,7 @@ function renderOiBoard(hostId, data) {
         </div>
       </div>
       <div class="oi-read">
+        <div class="rs-panel" data-rs-board="${b.label}"></div>
         <div><strong>Ab kya:</strong> ${read.what_now || "—"}</div>
         <div><strong>Aage (25–35 pt):</strong> ${read.what_next || "—"}</div>
       </div>
@@ -514,6 +515,7 @@ function renderOiBoard(hostId, data) {
       oiBody.appendChild(tr);
     });
     host.appendChild(wrap);
+    paintRsPanel(wrap, b.rs || {});
 
     // Place meter after layout
     requestAnimationFrame(() => {
@@ -521,6 +523,61 @@ function renderOiBoard(hostId, data) {
     });
   });
 }
+
+/** Sticky R / S strength cards (does not flicker with 3s tape) */
+function paintRsPanel(boardEl, rs) {
+  const host = boardEl.querySelector(".rs-panel");
+  if (!host) return;
+  if (!rs || rs.ok === false) {
+    host.innerHTML =
+      '<div class="rs-empty">R/S strength: wall OI history loading…</div>';
+    return;
+  }
+  const R = rs.resistance || {};
+  const S = rs.support || {};
+  const heat = rs.heat_5m || {};
+  const cls = (lab) => {
+    const L = (lab || "NEUTRAL").toUpperCase();
+    if (L === "WEAK") return "weak";
+    if (L === "STRONG") return "strong";
+    return "neutral";
+  };
+  const card = (title, side, kind) => {
+    const strike =
+      side.strike != null
+        ? Number(side.strike).toLocaleString("en-IN")
+        : "—";
+    const pend = side.pending
+      ? `<span class="rs-pend">${side.pending}</span>`
+      : "";
+    const p15 =
+      side.oi_pct_15m != null ? `${side.oi_pct_15m > 0 ? "+" : ""}${side.oi_pct_15m}%` : "—";
+    const p30 =
+      side.oi_pct_30m != null ? `${side.oi_pct_30m > 0 ? "+" : ""}${side.oi_pct_30m}%` : "—";
+    return `<div class="rs-card ${kind} ${cls(side.label)}">
+      <div class="rs-top">
+        <span class="rs-title">${title}</span>
+        <span class="rs-badge">${side.label || "NEUTRAL"}</span>
+      </div>
+      <div class="rs-strike">@ ${strike} <span class="rs-age">hold ${side.since || "—"}</span></div>
+      <div class="rs-why">${side.why || "—"} ${pend}</div>
+      <div class="rs-nums">15m OI ${p15} · 30m OI ${p30}</div>
+    </div>`;
+  };
+  host.innerHTML = `
+    <div class="rs-grid">
+      ${card("RESISTANCE (Call wall)", R, "r")}
+      ${card("SUPPORT (Put wall)", S, "s")}
+    </div>
+    <div class="rs-plan">${rs.plan || ""}</div>
+    <div class="rs-heat">
+      <span class="rs-heat-lbl">5m heat</span>
+      CE wall ${heat.ce_5m || "—"} · PE wall ${heat.pe_5m || "—"}
+      <span class="muted"> · sticky flip nahi karta</span>
+    </div>
+  `;
+}
+
 
 /**
  * Price ladder meter — needle Y maps live spot onto strike rows (high→low).

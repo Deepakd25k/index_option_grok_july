@@ -166,6 +166,61 @@ table.sheet.compact td, table.sheet.compact th { padding: 5px 7px; font-size: 11
 .oi-read .muted { color: #64748b; font-size: 11.5px; margin-top: 4px; }
 .oi-note { margin: 8px 14px 12px; font-size: 11.5px; color: #64748b; }
 
+/* Sticky R / S strength (slow interpretation) */
+.rs-panel { margin-bottom: 10px; }
+.rs-empty { font-size: 12px; color: #64748b; padding: 6px 0; }
+.rs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+@media (max-width: 720px) {
+  .rs-grid { grid-template-columns: 1fr; }
+}
+.rs-card {
+  border-radius: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.rs-card.r.strong { background: linear-gradient(135deg, #fef2f2, #fff); border-color: #fca5a5; }
+.rs-card.r.weak { background: linear-gradient(135deg, #ecfdf5, #fff); border-color: #86efac; }
+.rs-card.s.strong { background: linear-gradient(135deg, #ecfdf5, #fff); border-color: #86efac; }
+.rs-card.s.weak { background: linear-gradient(135deg, #fef2f2, #fff); border-color: #fca5a5; }
+.rs-card.neutral { background: #f8fafc; }
+.rs-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.rs-title { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; color: #64748b; }
+.rs-badge {
+  font-size: 12px; font-weight: 800; letter-spacing: 0.04em;
+  padding: 2px 8px; border-radius: 6px; background: #e2e8f0; color: #334155;
+}
+.rs-card.strong .rs-badge { background: #15803d; color: #fff; }
+.rs-card.r.strong .rs-badge { background: #b91c1c; color: #fff; }
+.rs-card.s.strong .rs-badge { background: #15803d; color: #fff; }
+.rs-card.weak .rs-badge { background: #0f172a; color: #fff; }
+.rs-card.r.weak .rs-badge { background: #15803d; color: #fff; } /* weak R = bullish tint */
+.rs-card.s.weak .rs-badge { background: #b91c1c; color: #fff; }
+.rs-strike { font-size: 14px; font-weight: 800; color: #0f172a; margin-bottom: 2px; }
+.rs-age { font-size: 11px; font-weight: 600; color: #94a3b8; margin-left: 6px; }
+.rs-why { font-size: 11.5px; color: #475569; line-height: 1.35; margin-bottom: 2px; }
+.rs-pend { display: inline-block; margin-left: 6px; font-size: 10.5px; color: #a16207; font-weight: 700; }
+.rs-nums { font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums; }
+.rs-plan {
+  font-size: 12.5px; font-weight: 600; color: #1e293b;
+  padding: 8px 10px; border-radius: 8px; background: #fff;
+  border: 1px solid #e2e8f0; margin-bottom: 6px;
+}
+.rs-heat {
+  font-size: 11px; color: #64748b;
+  padding: 4px 2px;
+}
+.rs-heat-lbl {
+  font-weight: 800; font-size: 10px; letter-spacing: 0.06em;
+  color: #94a3b8; margin-right: 6px;
+}
+
 table.oi-chain { border-collapse: separate; border-spacing: 0; width: 100%; }
 table.oi-chain th.ce, table.oi-chain td.ce {
   background: #fff7ed; text-align: right; border-right: 1px solid #fed7aa;
