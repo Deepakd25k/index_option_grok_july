@@ -176,6 +176,24 @@ tr.row-atm { background: #fffbeb !important; }
 tr.row-support { background: #f0fdf4 !important; }
 tr.row-resist { background: #fef2f2 !important; }
 
+/* Dual-line OI cell: absolute @ clock + Δ */
+table.oi-chain th .th-sub {
+  display: block; font-size: 9px; font-weight: 600; opacity: 0.75; margin-top: 1px;
+}
+table.oi-chain td { vertical-align: middle; padding: 5px 6px; font-size: 11.5px; }
+.oi-cell {
+  display: flex; flex-direction: column; align-items: inherit; gap: 1px; line-height: 1.25;
+}
+.oi-cell .oi-at, .oi-cell .oi-now {
+  font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.oi-cell .oi-d {
+  font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.oi-cell .oi-d.muted { font-weight: 500; color: #94a3b8; font-size: 9.5px; }
+td.ce .oi-cell { align-items: flex-end; }
+td.pe .oi-cell { align-items: flex-start; }
+
 /* ── Playbook conclusion cards ────────────────────────────── */
 .playbook {
   border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;

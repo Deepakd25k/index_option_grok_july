@@ -474,11 +474,28 @@ def candle_snapshot(candles: list, minutes_ago: int | None = None, day_open: boo
     return pack(chosen[0], chosen[1])
 
 
-def oi_premium_windows(instrument_key: str) -> dict[str, Any]:
+# Cache 1m candle windows so Live can poll every 3s without hammering Upstox.
+# Fresh chain OI still comes from option_chain on each build; only history is cached.
+_WIN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_WIN_TTL_SEC = 12.0
+
+
+def oi_premium_windows(instrument_key: str, use_cache: bool = True) -> dict[str, Any]:
     """
     ATM CE/PE style windows from 1-min candles:
     now, 5m, 15m, 30m, day_open → OI + premium (close).
+
+    Cached ~12s so the Live sheet can refresh every 3s safely.
     """
+    import time as _time
+
+    if not instrument_key:
+        return {}
+    if use_cache:
+        hit = _WIN_CACHE.get(instrument_key)
+        if hit and (_time.time() - hit[0]) < _WIN_TTL_SEC:
+            return hit[1]
+
     candles = intraday_v3(instrument_key, "minutes", "1")
     if not candles:
         # try 5-min if 1-min empty
@@ -505,7 +522,7 @@ def oi_premium_windows(instrument_key: str) -> dict[str, Any]:
             return None
         return round(100.0 * (float(a) - float(b)) / float(b), 2)
 
-    return {
+    out = {
         "now": now,
         "m5": w5,
         "m15": w15,
@@ -536,6 +553,9 @@ def oi_premium_windows(instrument_key: str) -> dict[str, Any]:
             "day": pct(now, wopen, "close"),
         },
     }
+    if use_cache and candles:
+        _WIN_CACHE[instrument_key] = (_time.time(), out)
+    return out
 
 
 def max_pain_api(instrument_key: str, expiry: str = "current_week") -> dict | None:

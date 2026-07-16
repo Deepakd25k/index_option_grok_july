@@ -129,9 +129,9 @@ def upstox_status():
 @app.get("/api/live-chain")
 @app.post("/api/live-chain")
 def live_chain():
-    """ATM±3 Call|Strike|Put board with 5/15/30m/day OI & premium levels (Upstox).
+    """ATM±3 Call|Strike|Put — live OI every poll; 5/15/30m/open history cached ~12s.
 
-    Heavier than /api/live — poll every ~12–15s. Prices still use /api/live @ 3s.
+    Safe to poll every 3s from Live sheet (candle history is TTL-cached server-side).
     """
     try:
         from app.oi_board import build_chain_board
@@ -143,6 +143,7 @@ def live_chain():
             "last_updated": now_str(),
             "oi_board": board,
             "error": board.get("error"),
+            "poll_hint_ms": 3000,
         }
     except Exception as e:
         log.exception("live-chain")

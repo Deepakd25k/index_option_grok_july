@@ -1,19 +1,22 @@
 """
 Live Market OI board — Call | Strike | Put
 
-User ask:
-  ATM (e.g. 24100) ± 3 strikes
-  For each CE & PE show actual OI & premium at:
-    now · 5 min ago · 15 min ago · 30 min ago · day open (~9:15)
-  plus Δ (inc/dec) vs those points
+User requirement (plan):
+  Live sheet har ~3s refresh (prices + live OI).
+  ATM e.g. 24100 → ATM±3 strikes only.
+  Har strike pe CALL aur PUT:
+    abhi OI kya hai
+    5m pe kitna tha (clock time e.g. 13:25) + abhi se kitna ±
+    15m / 30m / day open (~9:15) same
+  Same pattern premium (LTP) pe.
   Strike marks: ATM / SUPPORT(green) / RESIST(red) / MAX PAIN
-  Simple readout: kya ho raha hai / aage kya
 
 Data: Upstox option/chain (live OI+LTP) + v3 1-min candles (history of OI+close)
 """
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from app import upstox_api as ux
@@ -63,6 +66,17 @@ def _snap_vals(w: dict | None, key: str) -> dict[str, float | None]:
     return out
 
 
+def _snap_ts(w: dict | None) -> dict[str, str | None]:
+    w = w or {}
+    return {
+        "now": (w.get("now") or {}).get("ts"),
+        "m5": (w.get("m5") or {}).get("ts"),
+        "m15": (w.get("m15") or {}).get("ts"),
+        "m30": (w.get("m30") or {}).get("ts"),
+        "open": (w.get("day_open") or {}).get("ts"),
+    }
+
+
 def _band_rows(rows: list[dict], spot: float, n: int = 3) -> list[dict]:
     strikes = sorted({r["strike"] for r in rows})
     if not strikes:
@@ -81,39 +95,56 @@ def _band_rows(rows: list[dict], spot: float, n: int = 3) -> list[dict]:
     return out
 
 
-def _side_block(live_oi, live_ltp, windows: dict, field_oi="oi", field_px="close") -> dict:
-    """Absolute levels + changes for one side (CE or PE)."""
-    abs_oi = _snap_vals(windows, field_oi)
-    abs_px = _snap_vals(windows, field_px)
-    # prefer live chain for "now"
-    oi_now = abs_oi.get("now") if abs_oi.get("now") is not None else live_oi
-    px_now = abs_px.get("now") if abs_px.get("now") is not None else live_ltp
+def _side_block(live_oi, live_ltp, windows: dict) -> dict:
+    """
+    One side (CE or PE):
+      oi_now = live chain OI (updates every poll)
+      oi_5m  = { at: OI at ~5m clock, ts: "13:25", chg: now−at, disp: "+1,200" }
+    Same for 15m / 30m / open and premium.
+    """
+    abs_oi = _snap_vals(windows, "oi")
+    abs_px = _snap_vals(windows, "close")
+    tss = _snap_ts(windows)
 
-    def pack(level_now, levels, label):
+    # Prefer live chain for "now" so 3s polls show fresh OI/LTP
+    oi_now = live_oi if live_oi is not None else abs_oi.get("now")
+    px_now = live_ltp if live_ltp is not None else abs_px.get("now")
+
+    def pack_oi(level_now, levels, label):
         old = levels.get(label)
         d = _delta(level_now, old)
         p = _pct(level_now, old)
+        ts = tss.get(label)
         return {
             "at": old,
+            "ts": ts,
             "chg": d,
             "chg_pct": p,
             "disp": _chg_str(d, p) if d is not None else "—",
-            "at_disp": f"{old:,.0f}" if old is not None and field_oi == "oi" else (
-                f"{old:.2f}" if old is not None else "—"
+            "at_disp": f"{old:,.0f}" if old is not None else "—",
+            # UI: "13:25 · 1,24,500" + "Δ +3,200"
+            "line1": (
+                f"@{ts} {old:,.0f}" if (ts and old is not None) else (f"{old:,.0f}" if old is not None else "—")
             ),
+            "line2": _chg_str(d, p) if d is not None else "—",
         }
 
-    # for premium use 2 decimals in at_disp
     def pack_px(level_now, levels, label):
         old = levels.get(label)
         d = _delta(level_now, old)
         p = _pct(level_now, old)
+        ts = tss.get(label)
         return {
             "at": old,
+            "ts": ts,
             "chg": d,
             "chg_pct": p,
             "disp": _chg_str(d, p) if d is not None else "—",
             "at_disp": f"{old:.2f}" if old is not None else "—",
+            "line1": (
+                f"@{ts} {old:.2f}" if (ts and old is not None) else (f"{old:.2f}" if old is not None else "—")
+            ),
+            "line2": _chg_str(d, p) if d is not None else "—",
         }
 
     oi_now_f = float(oi_now) if oi_now is not None else None
@@ -124,15 +155,15 @@ def _side_block(live_oi, live_ltp, windows: dict, field_oi="oi", field_px="close
         "oi_now_disp": f"{oi_now_f:,.0f}" if oi_now_f is not None else "—",
         "prem_now": px_now_f,
         "prem_now_disp": f"{px_now_f:.2f}" if px_now_f is not None else "—",
-        "oi_5m": pack(oi_now_f, abs_oi, "m5"),
-        "oi_15m": pack(oi_now_f, abs_oi, "m15"),
-        "oi_30m": pack(oi_now_f, abs_oi, "m30"),
-        "oi_open": pack(oi_now_f, abs_oi, "open"),
+        "oi_5m": pack_oi(oi_now_f, abs_oi, "m5"),
+        "oi_15m": pack_oi(oi_now_f, abs_oi, "m15"),
+        "oi_30m": pack_oi(oi_now_f, abs_oi, "m30"),
+        "oi_open": pack_oi(oi_now_f, abs_oi, "open"),
         "prem_5m": pack_px(px_now_f, abs_px, "m5"),
         "prem_15m": pack_px(px_now_f, abs_px, "m15"),
         "prem_30m": pack_px(px_now_f, abs_px, "m30"),
         "prem_open": pack_px(px_now_f, abs_px, "open"),
-        # absolute at times (what user asked: 1:25 pe kya tha)
+        # absolute at times (1:25 pe kya tha)
         "oi_at_5m": abs_oi.get("m5"),
         "oi_at_15m": abs_oi.get("m15"),
         "oi_at_30m": abs_oi.get("m30"),
@@ -141,11 +172,11 @@ def _side_block(live_oi, live_ltp, windows: dict, field_oi="oi", field_px="close
         "prem_at_15m": abs_px.get("m15"),
         "prem_at_30m": abs_px.get("m30"),
         "prem_at_open": abs_px.get("open"),
-        "ts_5m": (windows or {}).get("m5", {}).get("ts"),
-        "ts_15m": (windows or {}).get("m15", {}).get("ts"),
-        "ts_30m": (windows or {}).get("m30", {}).get("ts"),
-        "ts_open": (windows or {}).get("day_open", {}).get("ts"),
-        "ts_now": (windows or {}).get("now", {}).get("ts"),
+        "ts_5m": tss.get("m5"),
+        "ts_15m": tss.get("m15"),
+        "ts_30m": tss.get("m30"),
+        "ts_open": tss.get("open"),
+        "ts_now": tss.get("now"),
     }
 
 
@@ -190,11 +221,39 @@ def _readout(label, spot, atm, mp, pcr, ce_wall, pe_wall, tot_ce_d, tot_pe_d) ->
     }
 
 
+def _fetch_windows_parallel(keys: list[str]) -> dict[str, dict]:
+    """Fetch 1m OI/premium windows for many instrument keys in parallel (cache-aware)."""
+    out: dict[str, dict] = {}
+    keys = [k for k in keys if k]
+    if not keys:
+        return out
+
+    def one(k: str) -> tuple[str, dict]:
+        try:
+            return k, ux.oi_premium_windows(k)
+        except Exception as e:
+            log.warning("windows %s: %s", k, e)
+            return k, {}
+
+    # Cap workers — Upstox rate limits; cache hits return instantly
+    workers = min(8, max(1, len(keys)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = [pool.submit(one, k) for k in keys]
+        for f in as_completed(futs):
+            try:
+                k, w = f.result()
+                out[k] = w
+            except Exception as e:
+                log.warning("window future: %s", e)
+    return out
+
+
 def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any]:
     """
-    with_windows=True → fetch 1m candles for every CE/PE in ATM±3 (heavier).
-    Call every ~15s from UI; live OI/LTP can refresh more often via same endpoint
-    when with_windows=False for a lighter tick (optional).
+    ATM±3 Call|Strike|Put board.
+
+    Live OI/LTP always from fresh option_chain.
+    History windows (5/15/30/open) from 1m candles — cached ~12s so UI can poll every 3s.
     """
     if not ux.enabled():
         return {
@@ -232,6 +291,16 @@ def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any
         atm_strike = atm["strike"] if atm else None
         band_rows = _band_rows(rows, spot, n=band)
 
+        win_map: dict[str, dict] = {}
+        if with_windows:
+            keys = []
+            for r in band_rows:
+                if r.get("ce_key"):
+                    keys.append(r["ce_key"])
+                if r.get("pe_key"):
+                    keys.append(r["pe_key"])
+            win_map = _fetch_windows_parallel(keys)
+
         table = []
         for r in band_rows:
             strike = r["strike"]
@@ -249,40 +318,38 @@ def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any
                 marks.append("MAX PAIN")
                 mark_class = (mark_class + " maxpain").strip() if mark_class else "maxpain"
 
-            ce_w = pe_w = {}
-            if with_windows:
-                if r.get("ce_key"):
-                    try:
-                        ce_w = ux.oi_premium_windows(r["ce_key"])
-                    except Exception as e:
-                        log.warning("ce windows %s: %s", strike, e)
-                if r.get("pe_key"):
-                    try:
-                        pe_w = ux.oi_premium_windows(r["pe_key"])
-                    except Exception as e:
-                        log.warning("pe windows %s: %s", strike, e)
+            ce_w = win_map.get(r.get("ce_key") or "", {}) if with_windows else {}
+            pe_w = win_map.get(r.get("pe_key") or "", {}) if with_windows else {}
 
             ce = _side_block(r.get("ce_oi"), r.get("ce_ltp"), ce_w)
             pe = _side_block(r.get("pe_oi"), r.get("pe_ltp"), pe_w)
 
-            # day Δ also from chain prev_oi as backup
+            # day open fallback from chain prev_oi
             if ce.get("oi_open", {}).get("at") is None and r.get("ce_prev_oi"):
                 d = _delta(ce.get("oi_now"), r.get("ce_prev_oi"))
+                p = _pct(ce.get("oi_now"), r.get("ce_prev_oi"))
                 ce["oi_open"] = {
                     "at": r.get("ce_prev_oi"),
+                    "ts": "~open",
                     "at_disp": f"{r['ce_prev_oi']:,.0f}",
                     "chg": d,
-                    "chg_pct": _pct(ce.get("oi_now"), r.get("ce_prev_oi")),
-                    "disp": _chg_str(d, _pct(ce.get("oi_now"), r.get("ce_prev_oi"))),
+                    "chg_pct": p,
+                    "disp": _chg_str(d, p),
+                    "line1": f"{r['ce_prev_oi']:,.0f}",
+                    "line2": _chg_str(d, p),
                 }
             if pe.get("oi_open", {}).get("at") is None and r.get("pe_prev_oi"):
                 d = _delta(pe.get("oi_now"), r.get("pe_prev_oi"))
+                p = _pct(pe.get("oi_now"), r.get("pe_prev_oi"))
                 pe["oi_open"] = {
                     "at": r.get("pe_prev_oi"),
+                    "ts": "~open",
                     "at_disp": f"{r['pe_prev_oi']:,.0f}",
                     "chg": d,
-                    "chg_pct": _pct(pe.get("oi_now"), r.get("pe_prev_oi")),
-                    "disp": _chg_str(d, _pct(pe.get("oi_now"), r.get("pe_prev_oi"))),
+                    "chg_pct": p,
+                    "disp": _chg_str(d, p),
+                    "line1": f"{r['pe_prev_oi']:,.0f}",
+                    "line2": _chg_str(d, p),
                 }
 
             table.append(
@@ -315,17 +382,23 @@ def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any
             tot_pe_d,
         )
 
-        # time labels from first ATM row windows if any
-        time_labels = {"now": "now", "m5": "5m ago", "m15": "15m ago", "m30": "30m ago", "open": "day open"}
+        # Clock times from ATM row (e.g. 13:25 vs 13:41)
+        time_labels = {
+            "now": "now",
+            "m5": "5m ago",
+            "m15": "15m ago",
+            "m30": "30m ago",
+            "open": "day open",
+        }
         for row in table:
             if row.get("marks") and "ATM" in row["marks"]:
-                ce = row["ce"]
+                c = row["ce"]
                 time_labels = {
-                    "now": ce.get("ts_now") or "now",
-                    "m5": ce.get("ts_5m") or "5m ago",
-                    "m15": ce.get("ts_15m") or "15m ago",
-                    "m30": ce.get("ts_30m") or "30m ago",
-                    "open": ce.get("ts_open") or "~9:15",
+                    "now": c.get("ts_now") or "now",
+                    "m5": c.get("ts_5m") or "5m ago",
+                    "m15": c.get("ts_15m") or "15m ago",
+                    "m30": c.get("ts_30m") or "30m ago",
+                    "open": c.get("ts_open") or "~9:15",
                 }
                 break
 
