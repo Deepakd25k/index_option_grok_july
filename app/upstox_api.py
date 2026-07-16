@@ -88,22 +88,138 @@ def quotes(instrument_keys: list[str]) -> dict[str, dict]:
 
 def index_ltp_map() -> dict[str, float | None]:
     """nifty/banknifty/sensex/vix last prices from Upstox."""
-    keys = list(IDX.values())
+    rich = live_index_bundle()
+    return {k: (v or {}).get("price") for k, v in rich.get("indices", {}).items()}
+
+
+def _f(v: Any) -> float | None:
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_quote(q: dict | None) -> dict[str, Any] | None:
+    """Normalize Upstox full market quote → price, prev, chg, chg_pct, ohlc."""
+    if not q or not isinstance(q, dict):
+        return None
+    ohlc = q.get("ohlc") if isinstance(q.get("ohlc"), dict) else {}
+    price = _f(q.get("last_price") if q.get("last_price") is not None else q.get("ltp"))
+    if price is None:
+        price = _f(ohlc.get("close"))
+    # Prefer true previous close fields (not today's ohlc.close)
+    prev = None
+    for key in ("previous_close", "prev_close", "close_price", "cp"):
+        prev = _f(q.get(key))
+        if prev is not None and price is not None and abs(prev - price) > 1e-6:
+            break
+        if prev is not None and price is None:
+            break
+        prev = None
+    # net change from API
+    net = _f(q.get("net_change"))
+    chg_pct = None
+    for key in ("percentage_change", "pChange", "net_change_percentage", "change_percent"):
+        chg_pct = _f(q.get(key))
+        if chg_pct is not None:
+            break
+    if chg_pct is None and price is not None and prev not in (None, 0):
+        chg_pct = round(100.0 * (price - prev) / prev, 2)
+    elif chg_pct is None and price is not None and net is not None and price - net != 0:
+        prev_calc = price - net
+        if prev_calc:
+            chg_pct = round(100.0 * net / prev_calc, 2)
+            prev = prev or prev_calc
+    if net is None and price is not None and prev is not None:
+        net = round(price - prev, 4)
+    # display
+    if price is None:
+        return None
+    sign = "+" if (chg_pct or 0) > 0 else ""
+    disp = f"{price:,.2f}"
+    if chg_pct is not None:
+        disp = f"{price:,.2f} ({sign}{chg_pct:.2f}%)"
+    return {
+        "price": price,
+        "prev": prev,
+        "chg": net,
+        "chg_pct": chg_pct,
+        "display": disp,
+        "open": _f(ohlc.get("open")),
+        "high": _f(ohlc.get("high")),
+        "low": _f(ohlc.get("low")),
+        "close": _f(ohlc.get("close")),
+        "volume": _f(q.get("volume")),
+        "source": "upstox",
+    }
+
+
+def live_index_bundle(include_futures: bool = False) -> dict[str, Any]:
+    """
+    Live bundle for continuous UI poll — **Upstox only** (fast).
+
+    Always: Nifty, BankNifty, Sensex, VIX, GIFT.
+    Optional: near index futures LTP (slower first time — instruments download).
+    """
+    if not enabled():
+        return {
+            "ok": False,
+            "source": "none",
+            "error": "UPSTOX_ACCESS_TOKEN not set",
+            "indices": {},
+            "futures": {},
+        }
+
+    keys = [
+        IDX["nifty"],
+        IDX["banknifty"],
+        IDX["sensex"],
+        IDX["vix"],
+        "GLOBAL_INDEX|SGX NIFTY",
+    ]
     raw = quotes(keys)
-    out: dict[str, float | None] = {}
-    for name, ik in IDX.items():
+    name_map = {
+        "nifty": IDX["nifty"],
+        "banknifty": IDX["banknifty"],
+        "sensex": IDX["sensex"],
+        "vix": IDX["vix"],
+        "gift": "GLOBAL_INDEX|SGX NIFTY",
+    }
+    indices: dict[str, Any] = {}
+    for name, ik in name_map.items():
         q = raw.get(ik) or raw.get(ik.replace("|", ":"))
-        if not q:
-            out[name] = None
-            continue
-        px = q.get("last_price") or q.get("ltp")
-        if px is None and isinstance(q.get("ohlc"), dict):
-            px = q["ohlc"].get("close")
+        parsed = _parse_quote(q)
+        if parsed:
+            indices[name] = parsed
+
+    futures: dict[str, Any] = {}
+    if include_futures:
         try:
-            out[name] = float(px) if px is not None else None
-        except (TypeError, ValueError):
-            out[name] = None
-    return out
+            for label, search in (("nifty_fut", "NIFTY"), ("banknifty_fut", "BANKNIFTY")):
+                fut = nearest_index_future(search)
+                if not fut or not fut.get("instrument_key"):
+                    continue
+                ik = fut["instrument_key"]
+                fq = quotes([ik])
+                q = fq.get(ik) or fq.get(str(ik).replace("|", ":"))
+                parsed = _parse_quote(q)
+                if parsed:
+                    parsed["instrument_key"] = ik
+                    parsed["trading_symbol"] = fut.get("trading_symbol")
+                    parsed["expiry"] = str(fut.get("expiry") or "")[:10]
+                    futures[label] = parsed
+        except Exception as e:
+            log.warning("live futures: %s", e)
+
+    return {
+        "ok": bool(indices),
+        "source": "upstox",
+        "indices": indices,
+        "futures": futures,
+        "ts": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S IST"),
+    }
 
 
 # ── Option contracts / chain / max pain / OI ─────────────────

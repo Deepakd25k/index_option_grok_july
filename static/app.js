@@ -537,6 +537,7 @@ async function boot() {
   try {
     await loadLatest();
     await loadHistory();
+    await pollLiveIndices(); // first Upstox live tick ASAP
   } catch (e) {
     const status = el("status");
     if (status) {
@@ -546,56 +547,114 @@ async function boot() {
   }
 }
 
-// Full refresh every 5 min
+// Full heavy refresh every 5 min (FII OI, pro edge, etc.)
 setInterval(() => {
   if (document.hidden) return;
   doRefresh().catch(() => {});
 }, 5 * 60 * 1000);
 
-// Live Nifty / BankNifty / Sensex / VIX every 45s (fast path, no full OI scrape)
+function paintLiveTicker(j) {
+  const setLive = (id, text, chg) => {
+    const n = el(id);
+    if (!n) return;
+    n.textContent = text || "—";
+    n.className = clsFromDisplay(String(text || ""), chg);
+  };
+  setLive("liveNifty", j.nifty_display, j.nifty_chg_pct);
+  setLive("liveBN", j.banknifty_display, j.banknifty_chg_pct);
+  setLive("liveSensex", j.sensex_display, j.sensex_chg_pct);
+  setLive("liveVix", j.vix_display, j.vix_chg_pct);
+  setLive("liveGift", j.gift_display, j.gift_chg_pct);
+  const ts = el("liveTs");
+  if (ts) ts.textContent = j.last_updated || "";
+  const src = el("liveSrc");
+  const dot = el("liveDot");
+  if (src) {
+    const s = (j.source || "").toLowerCase();
+    if (s.includes("upstox") && j.upstox) {
+      src.textContent = "UPSTOX LIVE";
+      src.className = "live-src upstox";
+      if (dot) dot.className = "live-dot on";
+    } else if (s.includes("yahoo")) {
+      src.textContent = "YAHOO FALLBACK";
+      src.className = "live-src yahoo";
+      if (dot) dot.className = "live-dot warn";
+    } else {
+      src.textContent = j.upstox === false ? "NO TOKEN" : "LIVE";
+      src.className = "live-src";
+      if (dot) dot.className = "live-dot err";
+    }
+  }
+  const st = el("status");
+  if (st && j.upstox) {
+    st.textContent = "Upstox live · " + (j.last_updated || "");
+    st.className = "pill ok";
+  } else if (st && j.upstox === false) {
+    st.textContent = "Set UPSTOX_ACCESS_TOKEN for live";
+    st.className = "pill warn";
+  }
+}
+
+/** Upstox-first live poll — keeps strip + Sheet India cells updating */
 async function pollLiveIndices() {
   if (document.hidden) return;
   try {
-    const r = await fetch("/api/live");
+    const r = await fetch("/api/live", { cache: "no-store" });
     const j = await r.json();
-    if (!j.ok) return;
+    if (!j || j.ok === false) {
+      const dot = el("liveDot");
+      if (dot) dot.className = "live-dot err";
+      if (j && j.error) {
+        const src = el("liveSrc");
+        if (src) {
+          src.textContent = "ERR";
+          src.className = "live-src";
+        }
+      }
+      return;
+    }
+    paintLiveTicker(j);
+
     const snap = window.__lastSnap || {};
-    // merge into last snapshot columns for India group
-    ["nifty", "banknifty", "sensex", "vix"].forEach((k) => {
+    ["nifty", "banknifty", "sensex", "vix", "gift"].forEach((k) => {
       if (j[k] != null) snap[k] = j[k];
       if (j[`${k}_display`]) snap[`${k}_display`] = j[`${k}_display`];
       if (j[`${k}_chg_pct`] != null) snap[`${k}_chg_pct`] = j[`${k}_chg_pct`];
-      if (Array.isArray(snap.columns)) {
-        snap.columns.forEach((c) => {
-          if (c.key === k) {
-            c.value = j[k];
-            c.display = j[`${k}_display`] || c.display;
-          }
-        });
-      }
-      if (Array.isArray(snap.column_groups)) {
-        snap.column_groups.forEach((g) => {
-          (g.columns || []).forEach((c) => {
-            if (c.key === k) {
-              c.value = j[k];
-              c.display = j[`${k}_display`] || c.display;
-            }
-          });
-        });
-      }
+      const patch = (c) => {
+        if (c.key === k) {
+          c.value = j[k];
+          c.display = j[`${k}_display`] || c.display;
+        }
+      };
+      (snap.columns || []).forEach(patch);
+      (snap.column_groups || []).forEach((g) => (g.columns || []).forEach(patch));
     });
-    if (j.last_updated) snap.last_updated = j.last_updated + " · live";
+    if (j.last_updated) {
+      snap.last_updated = j.last_updated + " · " + (j.source || "live");
+    }
     window.__lastSnap = snap;
-    // re-render sheet values without full history reload
-    const setText = (id, text) => {
-      const n = el(id);
-      if (n && text != null) n.textContent = text;
-    };
-    setText("lastUpdated", snap.last_updated || "—");
-    // rebuild India group tables via full renderSnapshot (cheap DOM)
-    renderSnapshot(snap);
+
+    // Only rebuild Sheet groups if Sheet tab is active (avoid thrashing Pro Edge DOM)
+    const sheetOn = el("panel-sheet")?.classList.contains("active");
+    if (sheetOn) {
+      const lu = el("lastUpdated");
+      if (lu) lu.textContent = snap.last_updated || "—";
+      const groups = el("groups");
+      if (groups && snap.column_groups) {
+        // light update: re-run renderSnapshot but skip pro-edge heavy if already painted
+        const pe = snap.pro_edge;
+        renderSnapshot(snap);
+        if (pe) snap.pro_edge = pe;
+      }
+    }
   } catch (e) {
-    /* silent */
+    const dot = el("liveDot");
+    if (dot) dot.className = "live-dot err";
   }
 }
-setInterval(pollLiveIndices, 45 * 1000);
+
+// Continuous live: every 10s (Upstox quotes only — cheap)
+const LIVE_MS = 10 * 1000;
+setInterval(pollLiveIndices, LIVE_MS);
+// kick immediately on load
+setTimeout(pollLiveIndices, 800);

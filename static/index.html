@@ -35,6 +35,18 @@
     </div>
   </header>
 
+  <!-- Always-on live strip — Upstox primary, polls continuously -->
+  <div class="live-strip" id="liveStrip">
+    <span class="live-dot" id="liveDot" title="Live feed"></span>
+    <span class="live-src" id="liveSrc">LIVE</span>
+    <span class="live-item"><b>Nifty</b> <span id="liveNifty">—</span></span>
+    <span class="live-item"><b>BN</b> <span id="liveBN">—</span></span>
+    <span class="live-item"><b>Sensex</b> <span id="liveSensex">—</span></span>
+    <span class="live-item"><b>VIX</b> <span id="liveVix">—</span></span>
+    <span class="live-item"><b>GIFT</b> <span id="liveGift">—</span></span>
+    <span class="live-item muted" id="liveTs">—</span>
+  </div>
+
   <main>
     <section id="panel-sheet" class="panel active" role="tabpanel">
       <div class="meta grid4">
@@ -163,6 +175,6 @@
     NSE OI CSV free · Yahoo Europe free · Upstox GIFT · Local JSON history (90d → weekly) · no Google bill
   </footer>
   <!-- cache-bust so browser loads new JS -->
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

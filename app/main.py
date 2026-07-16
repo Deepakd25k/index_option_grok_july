@@ -83,35 +83,74 @@ def refresh():
 @app.get("/api/live")
 @app.post("/api/live")
 def live_indices():
-    """Fast path: Nifty / BankNifty / Sensex / VIX only (keeps UI live)."""
-    try:
-        from app.fetchers import fetch_upstox_all, fetch_yahoo_all, format_price_chg, upstox_enabled
-        from app.calendar_util import now_str
+    """Continuous live feed — **Upstox primary** (Nifty/BN/Sensex/VIX/GIFT + near futures).
 
-        up = fetch_upstox_all() if upstox_enabled() else {}
-        y = fetch_yahoo_all()
-        keys = ("nifty", "banknifty", "sensex", "vix")
-        out = {"ok": True, "last_updated": now_str(), "upstox": upstox_enabled()}
+    Poll this every few seconds from the UI. Yahoo is only used if Upstox token
+    missing or a symbol fails — so live path stays fast and broker-true.
+    """
+    try:
+        from app import upstox_api as ux
+        from app.calendar_util import now_str
+        from app.fetchers import fetch_yahoo_all, format_price_chg
+
+        bundle = ux.live_index_bundle()
+        indices = bundle.get("indices") or {}
+        futures = bundle.get("futures") or {}
+        source = "upstox" if bundle.get("ok") else "none"
+
+        # Yahoo fallback only for missing symbols (no token / partial fail)
+        y = {}
+        need_fallback = not bundle.get("ok") or any(
+            k not in indices for k in ("nifty", "banknifty", "sensex", "vix")
+        )
+        if need_fallback:
+            try:
+                y = fetch_yahoo_all()
+                source = "upstox+yahoo" if bundle.get("ok") else "yahoo"
+            except Exception:
+                y = {}
+
+        keys = ("nifty", "banknifty", "sensex", "vix", "gift")
+        out: dict = {
+            "ok": True,
+            "last_updated": bundle.get("ts") or now_str(),
+            "source": source,
+            "upstox": ux.enabled(),
+            "live": True,
+        }
         for k in keys:
-            price = up.get(k)
-            if price is None:
-                price = y.get(k)
-            chg = y.get(f"{k}_chg_pct")
-            if up.get(f"{k}_chg_pct") is not None and abs(float(up.get(f"{k}_chg_pct") or 0)) > 1e-9:
-                chg = up.get(f"{k}_chg_pct")
-            # Prefer Yahoo chg if non-zero for display accuracy
-            ychg = y.get(f"{k}_chg_pct")
-            if ychg is not None and (chg is None or abs(float(chg)) < 1e-9):
-                chg = ychg
+            rec = indices.get(k) or {}
+            price = rec.get("price")
+            chg = rec.get("chg_pct")
+            disp = rec.get("display")
             if price is None and y.get(k) is not None:
                 price = y.get(k)
+                chg = y.get(f"{k}_chg_pct")
+                disp = y.get(f"{k}_display") or format_price_chg(price, chg)
             out[k] = price
             out[f"{k}_chg_pct"] = chg
-            out[f"{k}_display"] = (
-                y.get(f"{k}_display")
-                or up.get(f"{k}_display")
-                or format_price_chg(price, chg if isinstance(chg, (int, float)) else None)
-            )
+            out[f"{k}_display"] = disp or format_price_chg(price, chg)
+            if rec.get("open") is not None:
+                out[f"{k}_ohlc"] = {
+                    "o": rec.get("open"),
+                    "h": rec.get("high"),
+                    "l": rec.get("low"),
+                    "c": rec.get("close"),
+                }
+        # Futures LTPs (Upstox only)
+        out["futures"] = {
+            name: {
+                "price": f.get("price"),
+                "display": f.get("display"),
+                "chg_pct": f.get("chg_pct"),
+                "symbol": f.get("trading_symbol"),
+                "expiry": f.get("expiry"),
+            }
+            for name, f in futures.items()
+        }
+        if not out.get("nifty") and not out.get("banknifty"):
+            out["ok"] = False
+            out["error"] = bundle.get("error") or "No live quotes"
         return out
     except Exception as e:
         log.exception("live")

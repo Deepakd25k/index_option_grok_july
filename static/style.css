@@ -138,6 +138,39 @@ table.sheet.compact td, table.sheet.compact th { padding: 5px 7px; font-size: 11
   overflow-x: auto; font-size: 12px;
 }
 
+/* ── Live strip (Upstox continuous) ───────────────────────── */
+.live-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  padding: 8px 16px; background: #0f172a; color: #e2e8f0;
+  font-size: 12.5px; border-bottom: 1px solid #1e293b;
+  position: sticky; top: 52px; z-index: 15;
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #64748b;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+}
+.live-dot.on {
+  background: #22c55e;
+  animation: livePulse 1.6s ease-out infinite;
+}
+.live-dot.warn { background: #f59e0b; animation: none; }
+.live-dot.err { background: #ef4444; animation: none; }
+@keyframes livePulse {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+.live-src {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 8px; border-radius: 4px; background: #1e293b; color: #94a3b8;
+}
+.live-src.upstox { background: #14532d; color: #86efac; }
+.live-src.yahoo { background: #713f12; color: #fde68a; }
+.live-item b { color: #94a3b8; font-weight: 600; margin-right: 4px; }
+.live-item .num-pos { color: #4ade80; }
+.live-item .num-neg { color: #f87171; }
+.live-item.muted { color: #64748b; font-size: 11px; margin-left: auto; }
+
 /* ── Pro Edge tab ─────────────────────────────────────────── */
 .edge-hero {
   display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
