@@ -546,8 +546,56 @@ async function boot() {
   }
 }
 
-// soft auto-refresh every 5 min (don't spam if tab hidden)
+// Full refresh every 5 min
 setInterval(() => {
   if (document.hidden) return;
   doRefresh().catch(() => {});
 }, 5 * 60 * 1000);
+
+// Live Nifty / BankNifty / Sensex / VIX every 45s (fast path, no full OI scrape)
+async function pollLiveIndices() {
+  if (document.hidden) return;
+  try {
+    const r = await fetch("/api/live");
+    const j = await r.json();
+    if (!j.ok) return;
+    const snap = window.__lastSnap || {};
+    // merge into last snapshot columns for India group
+    ["nifty", "banknifty", "sensex", "vix"].forEach((k) => {
+      if (j[k] != null) snap[k] = j[k];
+      if (j[`${k}_display`]) snap[`${k}_display`] = j[`${k}_display`];
+      if (j[`${k}_chg_pct`] != null) snap[`${k}_chg_pct`] = j[`${k}_chg_pct`];
+      if (Array.isArray(snap.columns)) {
+        snap.columns.forEach((c) => {
+          if (c.key === k) {
+            c.value = j[k];
+            c.display = j[`${k}_display`] || c.display;
+          }
+        });
+      }
+      if (Array.isArray(snap.column_groups)) {
+        snap.column_groups.forEach((g) => {
+          (g.columns || []).forEach((c) => {
+            if (c.key === k) {
+              c.value = j[k];
+              c.display = j[`${k}_display`] || c.display;
+            }
+          });
+        });
+      }
+    });
+    if (j.last_updated) snap.last_updated = j.last_updated + " · live";
+    window.__lastSnap = snap;
+    // re-render sheet values without full history reload
+    const setText = (id, text) => {
+      const n = el(id);
+      if (n && text != null) n.textContent = text;
+    };
+    setText("lastUpdated", snap.last_updated || "—");
+    // rebuild India group tables via full renderSnapshot (cheap DOM)
+    renderSnapshot(snap);
+  } catch (e) {
+    /* silent */
+  }
+}
+setInterval(pollLiveIndices, 45 * 1000);

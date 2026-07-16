@@ -157,14 +157,24 @@ def fetch_yahoo_all() -> dict[str, Any]:
 
 # ── Upstox ───────────────────────────────────────────────────
 def upstox_enabled() -> bool:
-    return bool(UPSTOX_ACCESS_TOKEN)
+    try:
+        from app import upstox_api as ux
+
+        return ux.enabled()
+    except Exception:
+        return bool(UPSTOX_ACCESS_TOKEN)
 
 
 def upstox_headers() -> dict[str, str]:
-    return {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}",
-    }
+    try:
+        from app import upstox_api as ux
+
+        return ux.headers()
+    except Exception:
+        return {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}",
+        }
 
 
 def upstox_quotes(keys: list[str]) -> dict[str, dict[str, Any]]:

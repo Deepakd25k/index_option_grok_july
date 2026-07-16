@@ -80,6 +80,44 @@ def refresh():
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/api/live")
+@app.post("/api/live")
+def live_indices():
+    """Fast path: Nifty / BankNifty / Sensex / VIX only (keeps UI live)."""
+    try:
+        from app.fetchers import fetch_upstox_all, fetch_yahoo_all, format_price_chg, upstox_enabled
+        from app.calendar_util import now_str
+
+        up = fetch_upstox_all() if upstox_enabled() else {}
+        y = fetch_yahoo_all()
+        keys = ("nifty", "banknifty", "sensex", "vix")
+        out = {"ok": True, "last_updated": now_str(), "upstox": upstox_enabled()}
+        for k in keys:
+            price = up.get(k)
+            if price is None:
+                price = y.get(k)
+            chg = y.get(f"{k}_chg_pct")
+            if up.get(f"{k}_chg_pct") is not None and abs(float(up.get(f"{k}_chg_pct") or 0)) > 1e-9:
+                chg = up.get(f"{k}_chg_pct")
+            # Prefer Yahoo chg if non-zero for display accuracy
+            ychg = y.get(f"{k}_chg_pct")
+            if ychg is not None and (chg is None or abs(float(chg)) < 1e-9):
+                chg = ychg
+            if price is None and y.get(k) is not None:
+                price = y.get(k)
+            out[k] = price
+            out[f"{k}_chg_pct"] = chg
+            out[f"{k}_display"] = (
+                y.get(f"{k}_display")
+                or up.get(f"{k}_display")
+                or format_price_chg(price, chg if isinstance(chg, (int, float)) else None)
+            )
+        return out
+    except Exception as e:
+        log.exception("live")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 def _md_lite(md: str) -> str:
     """Minimal markdown → HTML for the Significance tab."""
     lines = md.splitlines()
