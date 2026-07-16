@@ -52,21 +52,36 @@ def headers() -> dict[str, str]:
     }
 
 
+# Last API error for Structure UI diagnostics
+LAST_ERROR: dict[str, Any] = {}
+
+
 def _get(path: str, params: dict | None = None, timeout: int = 25) -> dict | list | None:
+    global LAST_ERROR
     if not enabled():
+        LAST_ERROR = {"path": path, "error": "UPSTOX_ACCESS_TOKEN not set"}
         return None
     url = path if path.startswith("http") else f"{UPSTOX_BASE}{path}"
     try:
         r = requests.get(url, headers=headers(), params=params or {}, timeout=timeout)
         if r.status_code != 200:
+            LAST_ERROR = {
+                "path": path,
+                "params": params,
+                "status": r.status_code,
+                "body": r.text[:400],
+            }
             log.warning("Upstox %s → %s %s", path, r.status_code, r.text[:220])
             return None
         body = r.json()
         if isinstance(body, dict) and body.get("status") == "error":
+            LAST_ERROR = {"path": path, "params": params, "body": body}
             log.warning("Upstox error %s %s", path, body)
             return None
+        LAST_ERROR = {}
         return body
     except Exception as e:
+        LAST_ERROR = {"path": path, "params": params, "error": str(e)}
         log.warning("Upstox %s: %s", path, e)
         return None
 
@@ -251,27 +266,82 @@ def nearest_expiry(instrument_key: str) -> str | None:
     return future[0] if future else (sorted(exps)[0] if exps else None)
 
 
+def list_expiries(instrument_key: str) -> list[str]:
+    contracts = option_contracts(instrument_key)
+    today = datetime.now(TZ).date()
+    future = []
+    for c in contracts:
+        e = c.get("expiry")
+        if not e:
+            continue
+        e = str(e)[:10]
+        try:
+            ed = date.fromisoformat(e)
+        except ValueError:
+            continue
+        if ed >= today and e not in future:
+            future.append(e)
+    return sorted(future)
+
+
 def option_chain(instrument_key: str, expiry: str | None = None) -> list[dict]:
     """
-    Put/call chain. expiry can be YYYY-MM-DD or keyword current_week.
+    Put/call chain — resolve real expiry first (keywords often fail on some tokens).
+
+    Tries in order:
+      1) explicit expiry arg
+      2) nearest from /option/contract
+      3) next 2 expiries
+      4) keywords current_week / next_week
     """
-    exp = expiry or "current_week"
-    body = _get(
-        "/option/chain",
-        {"instrument_key": instrument_key, "expiry_date": exp},
-    )
-    if not body or not isinstance(body, dict):
-        # fallback: resolve real expiry date
-        if exp == "current_week":
-            real = nearest_expiry(instrument_key)
-            if real:
-                body = _get(
-                    "/option/chain",
-                    {"instrument_key": instrument_key, "expiry_date": real},
-                )
-    if not body or not isinstance(body, dict):
-        return []
-    return list(body.get("data") or [])
+    tried: list[str] = []
+    candidates: list[str] = []
+    if expiry and expiry not in ("current_week", "next_week", "current_month"):
+        candidates.append(expiry)
+
+    # Real dates from contracts (most reliable)
+    for e in list_expiries(instrument_key)[:3]:
+        if e not in candidates:
+            candidates.append(e)
+
+    for kw in ("current_week", "next_week", "current_month"):
+        if kw not in candidates:
+            candidates.append(kw)
+
+    last_body = None
+    for exp in candidates:
+        tried.append(exp)
+        body = _get(
+            "/option/chain",
+            {"instrument_key": instrument_key, "expiry_date": exp},
+        )
+        last_body = body
+        if not body or not isinstance(body, dict):
+            continue
+        data = body.get("data")
+        if isinstance(data, list) and len(data) > 0:
+            return data
+        # sometimes data is nested
+        if isinstance(data, dict) and data.get("data"):
+            inner = data.get("data")
+            if isinstance(inner, list) and inner:
+                return inner
+
+    # Alt instrument keys (some apps use NIFTY)
+    if "Nifty 50" in instrument_key:
+        alt = "NSE_INDEX|NIFTY"
+        for exp in candidates[:3]:
+            body = _get("/option/chain", {"instrument_key": alt, "expiry_date": exp})
+            if body and isinstance(body, dict):
+                data = body.get("data")
+                if isinstance(data, list) and data:
+                    return data
+
+    LAST_ERROR["chain_tried"] = tried
+    LAST_ERROR["instrument_key"] = instrument_key
+    if last_body is not None:
+        LAST_ERROR["last_body_type"] = str(type(last_body))
+    return []
 
 
 def parse_chain_rows(chain: list[dict]) -> tuple[float | None, list[dict], str | None]:

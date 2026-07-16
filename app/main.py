@@ -80,6 +80,52 @@ def refresh():
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/api/upstox-status")
+def upstox_status():
+    """Diagnose why Structure/chain may fail while Live shows prices."""
+    try:
+        from app import upstox_api as ux
+        from app.fetchers import fetch_yahoo_all
+
+        token_on = ux.enabled()
+        quotes_ok = False
+        chain_n = 0
+        contracts_n = 0
+        expiries: list = []
+        err = {}
+        if token_on:
+            q = ux.quotes([ux.IDX["nifty"]])
+            quotes_ok = bool(q)
+            contracts = ux.option_contracts(ux.IDX["nifty"])
+            contracts_n = len(contracts)
+            expiries = ux.list_expiries(ux.IDX["nifty"])[:5]
+            chain = ux.option_chain(ux.IDX["nifty"])
+            chain_n = len(chain)
+            err = dict(ux.LAST_ERROR or {})
+        y = {}
+        try:
+            y = fetch_yahoo_all()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "token_set": token_on,
+            "upstox_quotes_ok": quotes_ok,
+            "option_contracts": contracts_n,
+            "expiries": expiries,
+            "option_chain_strikes": chain_n,
+            "last_error": err,
+            "yahoo_nifty": y.get("nifty_display"),
+            "hint": (
+                "Structure needs token_set=true AND option_chain_strikes>0. "
+                "If token_set=false but yahoo_nifty has value, Live is Yahoo not Upstox."
+            ),
+        }
+    except Exception as e:
+        log.exception("upstox-status")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/live")
 @app.post("/api/live")
 def live_indices():

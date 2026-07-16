@@ -285,13 +285,27 @@ def build_upstox_option_structure() -> dict[str, Any]:
         atm = ux.atm_row(rows, spot)
 
         if not rows:
+            err = ux.LAST_ERROR or {}
+            detail = ""
+            if err.get("status"):
+                detail = f" HTTP {err.get('status')}"
+            if err.get("body"):
+                detail += f" · {str(err.get('body'))[:120]}"
+            if err.get("error"):
+                detail += f" · {err.get('error')}"
+            if err.get("chain_tried"):
+                detail += f" · tried expiry={err.get('chain_tried')}"
+            if not ux.enabled():
+                detail = " UPSTOX_ACCESS_TOKEN missing (Live strip may still show Yahoo)."
             cards.append(
                 _card(
                     f"{label}_empty",
                     f"{label} chain",
-                    "Empty / API fail",
-                    "Upstox option chain returned no strikes.",
-                    "Check token scope, expiry (current_week), market day.",
+                    "Empty / API fail" + detail,
+                    "Upstox /v2/option/chain returned no strikes.",
+                    "Live Nifty can work from Yahoo without token. Structure needs valid Upstox token with market data. "
+                    "Put token in .env or Vercel env, restart/redeploy, then Refresh. "
+                    "If token works for quotes but not chain, regenerate token / check app permissions.",
                 )
             )
             continue

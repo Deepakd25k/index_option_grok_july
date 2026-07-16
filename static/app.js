@@ -269,7 +269,39 @@ function renderFii(data) {
   renderOi(data);
 }
 
+async function loadStructureDiag() {
+  const box = el("structureDiag");
+  if (!box) return;
+  try {
+    const r = await fetch("/api/upstox-status", { cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok) {
+      box.textContent = "Diag failed: " + (j.error || "");
+      return;
+    }
+    const parts = [
+      `token: ${j.token_set ? "YES" : "NO"}`,
+      `Upstox quotes: ${j.upstox_quotes_ok ? "OK" : "fail"}`,
+      `contracts: ${j.option_contracts}`,
+      `expiries: ${(j.expiries || []).join(", ") || "—"}`,
+      `chain strikes: ${j.option_chain_strikes}`,
+    ];
+    if (!j.token_set && j.yahoo_nifty) {
+      parts.push(`⚠ Live Nifty is Yahoo (${j.yahoo_nifty}) — Structure needs token`);
+    }
+    if (j.last_error && Object.keys(j.last_error).length) {
+      parts.push(`API err: ${JSON.stringify(j.last_error).slice(0, 180)}`);
+    }
+    parts.push(j.hint || "");
+    box.textContent = parts.join(" · ");
+    box.style.color = j.option_chain_strikes > 0 ? "#137333" : "#b06000";
+  } catch (e) {
+    box.textContent = "Diag error: " + e.message;
+  }
+}
+
 function renderStructure(data) {
+  loadStructureDiag();
   const blocks = proBlocksBySection(data, (s) =>
     /Option structure/i.test(s)
   );
