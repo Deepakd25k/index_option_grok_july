@@ -138,6 +138,67 @@ table.sheet.compact td, table.sheet.compact th { padding: 5px 7px; font-size: 11
   overflow-x: auto; font-size: 12px;
 }
 
+/* ── Pro Edge tab ─────────────────────────────────────────── */
+.edge-hero {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  margin-bottom: 14px; padding: 14px 16px;
+  background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
+  color: #fff; border-radius: 10px; box-shadow: var(--shadow);
+}
+.edge-hero h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+.edge-blurb { margin: 0; font-size: 12.5px; opacity: 0.9; line-height: 1.45; max-width: 720px; }
+.edge-meta { font-size: 11px; opacity: 0.75; white-space: nowrap; }
+.edge-signals {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
+}
+.edge-signals:empty { display: none; }
+.edge-chip {
+  font-size: 11px; padding: 5px 10px; border-radius: 999px;
+  background: #fff3cd; color: #7a5b00; border: 1px solid #ffe082;
+}
+.edge-block {
+  background: var(--sheet); border: 1px solid var(--border); border-radius: 10px;
+  margin-bottom: 14px; overflow: hidden; box-shadow: var(--shadow);
+}
+.edge-block-head {
+  padding: 10px 14px; font-size: 13px; font-weight: 700;
+  background: #e8f0fe; color: #174ea6; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+}
+.edge-block-head .note-sm { font-weight: 400; font-size: 11px; color: var(--muted); }
+.edge-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0;
+}
+.edge-card {
+  padding: 12px 14px; border-bottom: 1px solid var(--border); border-right: 1px solid #f0f0f0;
+  min-height: 118px;
+}
+.edge-card:hover { background: #fafcff; }
+.edge-card .ec-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); margin-bottom: 4px; font-weight: 600;
+}
+.edge-card .ec-value {
+  font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums;
+  font-family: "Roboto Mono", ui-monospace, monospace;
+  margin-bottom: 8px; line-height: 1.35; word-break: break-word;
+}
+.edge-card .ec-meaning {
+  font-size: 12px; color: var(--text); margin-bottom: 4px; line-height: 1.4;
+}
+.edge-card .ec-why {
+  font-size: 11.5px; color: var(--muted); line-height: 1.4;
+}
+.edge-card .ec-why strong { color: #174ea6; font-weight: 600; }
+.edge-card .ec-signal {
+  display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; background: #fce8e6; color: #a50e0e;
+}
+.edge-card .ec-signal.ok { background: var(--green-bg); color: var(--green); }
+.edge-empty {
+  padding: 20px; text-align: center; color: var(--muted); font-size: 13px;
+}
+
 footer { text-align: center; padding: 14px; font-size: 11px; color: var(--muted); }
 
 @media (max-width: 900px) {

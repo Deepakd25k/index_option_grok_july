@@ -70,6 +70,10 @@ function switchTab(name) {
   }
   if (tabName === "docs") loadDocs();
   if (tabName === "history") loadHistory().catch(() => {});
+  if (tabName === "edge") {
+    /* re-render from last snapshot if present */
+    if (window.__lastSnap) renderProEdge(window.__lastSnap);
+  }
   // scroll to top of content so user sees panel change
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -77,8 +81,74 @@ function switchTab(name) {
 // expose for inline onclick fallback
 window.switchTab = switchTab;
 
+function renderProEdge(data) {
+  const pe = (data && data.pro_edge) || {};
+  const head = el("edgeHeadline");
+  const blurb = el("edgeBlurb");
+  const built = el("edgeBuilt");
+  const sigBox = el("edgeSignals");
+  const blocks = el("edgeBlocks");
+  if (head) head.textContent = pe.headline || "Pro Edge";
+  if (blurb) blurb.textContent = pe.blurb || "";
+  if (built) built.textContent = pe.built_at ? "Built " + pe.built_at : "";
+  if (sigBox) {
+    sigBox.innerHTML = "";
+    (pe.active_signals || []).forEach((s) => {
+      const chip = document.createElement("span");
+      chip.className = "edge-chip";
+      chip.textContent = s;
+      sigBox.appendChild(chip);
+    });
+  }
+  if (!blocks) return;
+  blocks.innerHTML = "";
+  const list = pe.blocks || [];
+  if (!list.length) {
+    blocks.innerHTML =
+      '<div class="edge-empty">No Pro Edge data yet — click <strong>↻ Refresh</strong>.</div>';
+    return;
+  }
+  list.forEach((block) => {
+    const wrap = document.createElement("div");
+    wrap.className = "edge-block";
+    const note = block.note
+      ? `<span class="note-sm">${block.note}</span>`
+      : block.oi_date
+        ? `<span class="note-sm">OI date ${block.oi_date}</span>`
+        : "";
+    wrap.innerHTML = `<div class="edge-block-head"><span>${block.section || "Section"}</span>${note}</div>`;
+    const grid = document.createElement("div");
+    grid.className = "edge-grid";
+    const cards = block.cards || [];
+    if (!cards.length) {
+      grid.innerHTML =
+        '<div class="edge-empty" style="grid-column:1/-1">Nothing in this block right now.</div>';
+    }
+    cards.forEach((c) => {
+      const card = document.createElement("div");
+      card.className = "edge-card";
+      const sig = c.signal
+        ? `<div class="ec-signal${
+            /⚠️|risk|conflict|Defensive|stress|lag/i.test(c.signal) ? "" : " ok"
+          }">${c.signal}</div>`
+        : "";
+      card.innerHTML = `
+        <div class="ec-title">${c.title || ""}</div>
+        <div class="ec-value ${clsFromDisplay(String(c.value), null)}">${c.value ?? "—"}</div>
+        <div class="ec-meaning">${c.meaning || ""}</div>
+        <div class="ec-why"><strong>Why:</strong> ${c.why || ""}</div>
+        ${sig}`;
+      grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    blocks.appendChild(wrap);
+  });
+}
+
 function renderSnapshot(data) {
   if (!data) return;
+  window.__lastSnap = data;
+  renderProEdge(data);
   const setText = (id, text) => {
     const n = el(id);
     if (n) n.textContent = text;

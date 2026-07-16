@@ -25,6 +25,7 @@
     <div class="actions">
       <nav class="tabs" role="tablist">
         <button type="button" class="tab active" data-tab="sheet" onclick="switchTab('sheet')">Sheet</button>
+        <button type="button" class="tab" data-tab="edge" onclick="switchTab('edge')">Pro Edge</button>
         <button type="button" class="tab" data-tab="oi" onclick="switchTab('oi')">FII OI</button>
         <button type="button" class="tab" data-tab="history" onclick="switchTab('history')">Daily Log</button>
         <button type="button" class="tab" data-tab="docs" onclick="switchTab('docs')">Significance</button>
@@ -67,6 +68,19 @@
       </div>
 
       <div id="groups"></div>
+    </section>
+
+    <!-- PRO EDGE — advanced clean cards -->
+    <section id="panel-edge" class="panel" role="tabpanel">
+      <div class="edge-hero">
+        <div>
+          <h2 id="edgeHeadline">Pro Edge</h2>
+          <p id="edgeBlurb" class="edge-blurb">Loading advanced signals…</p>
+        </div>
+        <div class="edge-meta" id="edgeBuilt">—</div>
+      </div>
+      <div id="edgeSignals" class="edge-signals"></div>
+      <div id="edgeBlocks" class="edge-blocks"></div>
     </section>
 
     <section id="panel-oi" class="panel" role="tabpanel">
@@ -149,6 +163,6 @@
     NSE OI CSV free · Yahoo Europe free · Upstox GIFT · Local JSON history (90d → weekly) · no Google bill
   </footer>
   <!-- cache-bust so browser loads new JS -->
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

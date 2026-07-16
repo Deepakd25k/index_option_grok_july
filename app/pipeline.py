@@ -16,6 +16,7 @@ from app.fetchers import (
 )
 from app.nse_oi import fetch_latest_participant_oi
 from app.fii_trend import build_week_trend
+from app.advanced_edge import build_pro_edge
 from app import storage
 
 log = logging.getLogger(__name__)
@@ -471,6 +472,27 @@ def run_refresh() -> dict[str, Any]:
     snapshot["fii_week"] = fii_week
     snapshot["sources"] = sources
     snapshot["errors"] = errors
+
+    # ── Pro Edge tab (advanced, clean cards) ──
+    try:
+        snapshot["pro_edge"] = build_pro_edge(
+            {
+                "nifty_chg_pct": nifty_chg,
+                "fii_week": fii_week,
+            }
+        )
+        sources.append("pro_edge")
+        snapshot["sources"] = sources
+    except Exception as e:
+        errors.append(f"pro_edge:{e}")
+        log.exception("pro_edge")
+        snapshot["errors"] = errors
+        snapshot["pro_edge"] = {
+            "headline": "Pro Edge",
+            "blurb": "Build failed — see errors.",
+            "blocks": [],
+            "active_signals": [],
+        }
 
     storage.save_latest(snapshot)
     # history without huge nested participants every day? keep slim

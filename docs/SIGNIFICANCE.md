@@ -3,7 +3,20 @@
 Kab dekhna hai, kya signal milta hai, kaise use karein.  
 (Premarket / ORB / bias planning for Nifty & BankNifty)
 
+## Pro Edge tab (advanced)
+
+New tab **Pro Edge** — clean cards, each with *what* + *why*:
+
+| Block | What |
+|-------|------|
+| Smart money positioning | FII index **options** long/short + Δ; FII vs Client vs Pro futures conflict |
+| Option structure | Max pain, PCR, call/put walls (needs Upstox token) |
+| Volatility & global tape | VIX, Nifty–VIX divergence, USDINR, crude, US futures, BN/Nifty RS |
+| ORB & futures volume | Opening range + volume vs 20D (**futures** preferred; Upstox) |
+| Edge scorecard | Your FII OI next-day hit-rate |
+
 ---
+
 
 ## 1. Meta
 
