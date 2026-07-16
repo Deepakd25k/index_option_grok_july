@@ -297,7 +297,13 @@ function renderLive(data) {
     );
   }
 
-  renderOiBoard("liveAtmHost", data);
+  // OI table only if empty; price meter always ticks with live indices
+  const atmHost = el("liveAtmHost");
+  if (atmHost && !atmHost.querySelector(".oi-board")) {
+    renderOiBoard("liveAtmHost", data);
+  } else {
+    updateStrikePriceMeters(data);
+  }
   const orb = proBlocksBySection(data, (s) =>
     /futures ORB|ORB & futures|Index futures ORB/i.test(s)
   );
@@ -306,8 +312,8 @@ function renderLive(data) {
 
 /**
  * Call | Strike | Put — ATM±3
- * One table: OI (L/Cr) + Prem in same cell. No @ symbols.
- * Headers carry clock time; cells = value + Δ.
+ * One table: OI (L/Cr) + Prem in same cell.
+ * Strike column has a LIVE PRICE meter that slides up/down as spot moves.
  */
 function renderOiBoard(hostId, data) {
   const host = el(hostId);
@@ -328,7 +334,6 @@ function renderOiBoard(hostId, data) {
   const chgCls = (chg) =>
     chg == null ? "" : chg > 0 ? "num-pos" : chg < 0 ? "num-neg" : "";
 
-  /** Combined OI + Prem cell for a time window (or now) */
   const sideCell = (oiObj, premObj, sideCls, isNow) => {
     const oiVal = isNow
       ? oiObj?.oi_now_disp || oiObj?.line1 || "—"
@@ -364,7 +369,6 @@ function renderOiBoard(hostId, data) {
     </td>`;
   };
 
-  /** For "now" we pass side objects differently */
   const nowCell = (side, sideCls) => {
     return `<td class="${sideCls}">
       <div class="oc now">
@@ -383,10 +387,23 @@ function renderOiBoard(hostId, data) {
   const winCell = (side, oiKey, premKey, sideCls) =>
     sideCell(side[oiKey], side[premKey], sideCls, false);
 
+  /** Live spot for this board — prefer continuous /api/live ticks */
+  const liveSpotFor = (label) => {
+    const L = (label || "").toLowerCase();
+    if (L.includes("bank")) {
+      return data.banknifty != null ? Number(data.banknifty) : null;
+    }
+    if (L.includes("nifty")) {
+      return data.nifty != null ? Number(data.nifty) : null;
+    }
+    return null;
+  };
+
   boards.forEach((b) => {
     const wrap = document.createElement("div");
     wrap.className = "sheet-wrap oi-board";
     wrap.style.marginBottom = "18px";
+    wrap.dataset.boardLabel = b.label || "";
     if (!b.ok) {
       wrap.innerHTML = `<div class="sheet-title">${b.label}</div><div class="edge-empty">${b.error || "No chain"}</div>`;
       host.appendChild(wrap);
@@ -394,12 +411,9 @@ function renderOiBoard(hostId, data) {
     }
     const read = b.read || {};
     const T = tl(b);
-    // Header labels: "5m" with optional clock subtitle — no @
     const head = (label, clock) => {
       const sub = clock && clock !== label ? clock : "";
-      return sub
-        ? `${label}<span class="th-sub">${sub}</span>`
-        : label;
+      return sub ? `${label}<span class="th-sub">${sub}</span>` : label;
     };
     const h5 = head("5m", T.m5);
     const h15 = head("15m", T.m15);
@@ -407,11 +421,16 @@ function renderOiBoard(hostId, data) {
     const hop = head("Open", T.open && T.open !== "day open" ? T.open : "9:15");
     const hNow = head("Now", T.now && T.now !== "now" ? T.now : "live");
 
+    const spotLive = liveSpotFor(b.label);
+    const spotShow = spotLive != null ? spotLive : b.spot;
+    const strikes = (b.rows || []).map((r) => Number(r.strike));
+    wrap.dataset.strikes = JSON.stringify(strikes);
+
     wrap.innerHTML = `
       <div class="oi-head">
         <div class="oi-head-main">
           <span class="oi-name">${b.label}</span>
-          <span class="oi-meta">Spot <b>${b.spot != null ? Number(b.spot).toFixed(2) : "—"}</b></span>
+          <span class="oi-meta">Spot <b class="oi-spot-val">${spotShow != null ? Number(spotShow).toFixed(2) : "—"}</b></span>
           <span class="oi-meta">ATM <b>${b.atm != null ? Number(b.atm).toLocaleString("en-IN") : "—"}</b> ±3</span>
           <span class="oi-meta">PCR <b>${b.pcr ?? "—"}</b></span>
           <span class="oi-meta muted">exp ${b.expiry || "—"}</span>
@@ -422,18 +441,19 @@ function renderOiBoard(hostId, data) {
           <span class="lg resist">Resist</span>
           <span class="lg maxpain">Max pain</span>
           <span class="lg unit">OI in L / Cr</span>
+          <span class="lg meter">● PRICE meter</span>
         </div>
       </div>
       <div class="oi-read">
         <div><strong>Ab kya:</strong> ${read.what_now || "—"}</div>
         <div><strong>Aage (25–35 pt):</strong> ${read.what_next || "—"}</div>
       </div>
-      <div class="table-scroll">
+      <div class="table-scroll oi-table-wrap">
         <table class="sheet oi-chain">
           <thead>
             <tr class="oi-side-hdr">
               <th class="ce" colspan="5">CALL → OI + Prem</th>
-              <th class="mid">STRIKE</th>
+              <th class="mid">STRIKE · PRICE</th>
               <th class="pe" colspan="5">← PUT OI + Prem</th>
             </tr>
             <tr>
@@ -442,7 +462,7 @@ function renderOiBoard(hostId, data) {
               <th class="ce">${h15}</th>
               <th class="ce">${h30}</th>
               <th class="ce">${hop}</th>
-              <th class="mid">±3</th>
+              <th class="mid">ladder</th>
               <th class="pe">${hop}</th>
               <th class="pe">${h30}</th>
               <th class="pe">${h15}</th>
@@ -452,8 +472,18 @@ function renderOiBoard(hostId, data) {
           </thead>
           <tbody class="oi-body"></tbody>
         </table>
+        <div class="price-meter" aria-label="Live price meter" hidden>
+          <div class="price-needle">
+            <span class="pm-arrow">◀</span>
+            <div class="pm-body">
+              <span class="pm-lbl">PRICE</span>
+              <span class="pm-val">—</span>
+            </div>
+            <span class="pm-arrow">▶</span>
+          </div>
+        </div>
       </div>
-      <p class="note oi-note">Har cell: <b>OI</b> (Lakh/Cr) + neeche <b>P</b> premium. Colour = Δ vs abhi (green badha · red gira). Clock time sirf column header me. Yellow=ATM · Green=support · Red=resist.</p>
+      <p class="note oi-note">Middle column = strikes. <b>PRICE</b> pill is live spot — slides up/down like a meter as price moves between strikes (3s). OI in L/Cr · P = premium · green Δ up · red Δ down.</p>
     `;
     const oiBody = wrap.querySelector(".oi-body");
 
@@ -462,6 +492,7 @@ function renderOiBoard(hostId, data) {
       const pe = r.pe || {};
       const tr = document.createElement("tr");
       if (r.mark_class) tr.className = "row-" + r.mark_class.split(" ")[0];
+      tr.dataset.strike = String(r.strike);
       const marks = (r.marks || []).join(" · ");
       const strikeCell = `
         <div class="strike-cell ${r.mark_class || ""}">
@@ -474,7 +505,7 @@ function renderOiBoard(hostId, data) {
         winCell(ce, "oi_15m", "prem_15m", "ce") +
         winCell(ce, "oi_30m", "prem_30m", "ce") +
         winCell(ce, "oi_open", "prem_open", "ce") +
-        `<td class="mid">${strikeCell}</td>` +
+        `<td class="mid mid-strike">${strikeCell}</td>` +
         winCell(pe, "oi_open", "prem_open", "pe") +
         winCell(pe, "oi_30m", "prem_30m", "pe") +
         winCell(pe, "oi_15m", "prem_15m", "pe") +
@@ -483,8 +514,123 @@ function renderOiBoard(hostId, data) {
       oiBody.appendChild(tr);
     });
     host.appendChild(wrap);
+
+    // Place meter after layout
+    requestAnimationFrame(() => {
+      positionPriceMeter(wrap, spotShow);
+    });
   });
 }
+
+/**
+ * Price ladder meter — needle Y maps live spot onto strike rows (high→low).
+ * Strikes are displayed highest at top (descending), like a price ladder.
+ */
+function positionPriceMeter(boardEl, spot) {
+  if (!boardEl || spot == null || !Number.isFinite(Number(spot))) return;
+  const spotN = Number(spot);
+  const meter = boardEl.querySelector(".price-meter");
+  const wrap = boardEl.querySelector(".oi-table-wrap");
+  const body = boardEl.querySelector(".oi-body");
+  const valEl = boardEl.querySelector(".pm-val");
+  const spotHead = boardEl.querySelector(".oi-spot-val");
+  if (!meter || !wrap || !body) return;
+
+  const rows = Array.from(body.querySelectorAll("tr[data-strike]"));
+  if (!rows.length) return;
+
+  const strikes = rows.map((r) => Number(r.dataset.strike));
+  // Display order: high strike at top → low at bottom
+  const wrapRect = wrap.getBoundingClientRect();
+
+  const rowCenterY = (row) => {
+    const mid = row.querySelector("td.mid-strike") || row;
+    const rr = mid.getBoundingClientRect();
+    return rr.top + rr.height / 2 - wrapRect.top + wrap.scrollTop;
+  };
+
+  let y;
+  const topS = strikes[0];
+  const botS = strikes[strikes.length - 1];
+
+  if (spotN >= topS) {
+    y = rowCenterY(rows[0]);
+  } else if (spotN <= botS) {
+    y = rowCenterY(rows[rows.length - 1]);
+  } else {
+    // find band: strikes[i] >= spot >= strikes[i+1] (descending)
+    let i = 0;
+    for (; i < strikes.length - 1; i++) {
+      if (spotN <= strikes[i] && spotN >= strikes[i + 1]) break;
+    }
+    const hi = strikes[i];
+    const lo = strikes[i + 1];
+    const span = hi - lo || 1;
+    const t = (hi - spotN) / span; // 0 at upper strike, 1 at lower
+    const y0 = rowCenterY(rows[i]);
+    const y1 = rowCenterY(rows[i + 1]);
+    y = y0 + t * (y1 - y0);
+  }
+
+  // Direction flash vs previous
+  const prev = boardEl._lastMeterSpot;
+  meter.classList.remove("up", "down");
+  if (prev != null && Number.isFinite(prev)) {
+    if (spotN > prev + 0.05) meter.classList.add("up");
+    else if (spotN < prev - 0.05) meter.classList.add("down");
+  }
+  boardEl._lastMeterSpot = spotN;
+
+  // Highlight nearest strike row
+  rows.forEach((r) => r.classList.remove("price-here"));
+  let nearest = rows[0];
+  let best = Infinity;
+  rows.forEach((r) => {
+    const d = Math.abs(Number(r.dataset.strike) - spotN);
+    if (d < best) {
+      best = d;
+      nearest = r;
+    }
+  });
+  nearest.classList.add("price-here");
+
+  const priceTxt = spotN.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (valEl) valEl.textContent = priceTxt;
+  if (spotHead) spotHead.textContent = spotN.toFixed(2);
+
+  // Align needle to center of strike (mid) column
+  const midSample = rows[0].querySelector("td.mid-strike");
+  if (midSample) {
+    const midRect = midSample.getBoundingClientRect();
+    const x = midRect.left + midRect.width / 2 - wrapRect.left + wrap.scrollLeft;
+    meter.style.left = `${Math.round(x)}px`;
+    meter.style.right = "auto";
+    meter.style.width = "0";
+  }
+  meter.hidden = false;
+  meter.style.transform = `translateY(${Math.round(y)}px)`;
+}
+
+/** Update only the PRICE needles from live index ticks (no full table rebuild). */
+function updateStrikePriceMeters(data) {
+  const host = el("liveAtmHost");
+  if (!host) return;
+  host.querySelectorAll(".oi-board").forEach((boardEl) => {
+    const label = (boardEl.dataset.boardLabel || "").toLowerCase();
+    let spot = null;
+    if (label.includes("bank")) spot = data.banknifty;
+    else if (label.includes("nifty")) spot = data.nifty;
+    if (spot == null) {
+      // fallback: keep board spot from last chain
+      return;
+    }
+    positionPriceMeter(boardEl, Number(spot));
+  });
+}
+
 
 function renderFii(data) {
   const c =
@@ -1037,6 +1183,7 @@ async function pollLiveChain() {
     window.__lastSnap = snap;
     if (el("panel-live")?.classList.contains("active")) {
       renderOiBoard("liveAtmHost", snap);
+      updateStrikePriceMeters(snap);
       // refresh playbook from board
       const boards = j.oi_board.boards || [];
       const nb = boards.find((b) => b.label === "Nifty" && b.ok);
