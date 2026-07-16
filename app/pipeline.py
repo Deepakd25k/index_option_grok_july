@@ -479,8 +479,12 @@ def run_refresh() -> dict[str, Any]:
             {
                 "nifty_chg_pct": nifty_chg,
                 "fii_week": fii_week,
+                "gap_pct": gap_pct,
+                "gap_category": gap_cat,
             }
         )
+        # convenience for FII tab
+        snapshot["fii_conclusion"] = (snapshot["pro_edge"] or {}).get("fii_conclusion")
         sources.append("pro_edge")
         snapshot["sources"] = sources
     except Exception as e:

@@ -51,22 +51,21 @@
     <section id="panel-pre" class="panel active" role="tabpanel">
       <div class="role-banner pre">
         <div>
-          <h2>Pre-Market</h2>
-          <p class="role-desc"><strong>Role:</strong> 7:30–9:15 IST open se pehle bias. Overnight globals + GIFT gap. Intraday yahan nahi.</p>
+          <h2>Pre-Market · Open plan</h2>
+          <p class="role-desc"><strong>Role:</strong> Kal ka FII + aaj ka GIFT/gap se <em>open bias</em>. Target: pehle 30–45 min me 25–35 pt scalp setup decide.</p>
         </div>
-        <div class="role-when">Use before 9:15</div>
+        <div class="role-when">7:30–9:15</div>
       </div>
-      <div class="meta grid4">
-        <div class="card"><label>Session</label><div id="preDateDay" class="val">—</div></div>
-        <div class="card"><label>Trading day?</label><div id="preTrading" class="val">—</div></div>
-        <div class="card"><label>Last full refresh</label><div id="preUpdated" class="val">—</div></div>
-        <div class="card"><label>Sources</label><div id="preSources" class="val small">—</div></div>
+      <div id="prePlaybook" class="playbook neutral">
+        <div class="pb-badge">PLAN</div>
+        <div class="pb-head" id="prePlayHead">Refresh for plan</div>
+        <div class="pb-body" id="prePlayBody">—</div>
       </div>
       <div class="highlights grid3">
         <div class="card hl gift">
           <label>GIFT Nifty</label>
           <div class="big" id="preGift">—</div>
-          <div class="muted">Strongest open lead</div>
+          <div class="muted">Open lead</div>
         </div>
         <div class="card hl">
           <label>Expected Gap</label>
@@ -75,8 +74,9 @@
           <div class="tag" id="preGapCat">—</div>
         </div>
         <div class="card hl">
-          <label>Gap meaning</label>
-          <div class="val small">Small = range ORB · Medium = selective · Large = trend/gap-fill plan</div>
+          <label>Session</label>
+          <div class="val" id="preDateDay">—</div>
+          <div class="muted" id="preTrading">—</div>
         </div>
       </div>
       <div id="preGroups"></div>
@@ -86,34 +86,39 @@
     <section id="panel-live" class="panel" role="tabpanel">
       <div class="role-banner live">
         <div>
-          <h2>Live Market</h2>
-          <p class="role-desc"><strong>Role:</strong> 9:15–15:30 continuous tape. <strong>Upstox live</strong> Nifty / BN / Sensex / VIX + futures ORB/volume. FII history yahan nahi.</p>
+          <h2>Live Market · Scalp board</h2>
+          <p class="role-desc"><strong>Role:</strong> Auto <strong>3 sec</strong> Upstox tape. ATM±3 OI/premium for 30-pt scalps. Manual refresh nahi.</p>
         </div>
-        <div class="role-when">Updates ~10s</div>
+        <div class="role-when">Auto 3s</div>
+      </div>
+      <div id="livePlaybook" class="playbook neutral">
+        <div class="pb-badge">NOW</div>
+        <div class="pb-head" id="livePlayHead">Waiting for live…</div>
+        <div class="pb-body" id="livePlayBody">—</div>
       </div>
       <div class="highlights grid4" id="liveCards">
         <div class="card hl">
           <label>Nifty 50</label>
           <div class="big" id="liveCardNifty">—</div>
-          <div class="muted">Upstox live</div>
+          <div class="muted">Upstox</div>
         </div>
         <div class="card hl">
           <label>BankNifty</label>
           <div class="big" id="liveCardBN">—</div>
-          <div class="muted">Upstox live</div>
+          <div class="muted">Upstox</div>
         </div>
         <div class="card hl">
           <label>Sensex</label>
           <div class="big" id="liveCardSensex">—</div>
-          <div class="muted">Upstox live</div>
+          <div class="muted">Upstox</div>
         </div>
         <div class="card hl">
           <label>India VIX</label>
           <div class="big" id="liveCardVix">—</div>
-          <div class="muted">Fear / premium</div>
+          <div class="muted">Fear</div>
         </div>
       </div>
-      <div id="liveGroups"></div>
+      <div id="liveAtmHost"></div>
       <div id="liveOrbBlocks" class="edge-blocks"></div>
     </section>
 
@@ -121,10 +126,20 @@
     <section id="panel-fii" class="panel" role="tabpanel">
       <div class="role-banner fii">
         <div>
-          <h2>FII Data</h2>
-          <p class="role-desc"><strong>Role:</strong> Smart money only — FII cash, futures, options book, week trend, next-day match. Client/Pro/DII yahan nahi.</p>
+          <h2>FII Data · Next-day edge</h2>
+          <p class="role-desc"><strong>Role:</strong> FII dekhne ka maksad yahi — <em>kal kya zyada probable</em>. Pehle conclusion, phir numbers.</p>
         </div>
-        <div class="role-when">Best after 7–7:30 PM</div>
+        <div class="role-when">After 7:30 PM</div>
+      </div>
+      <div id="fiiConclusion" class="playbook neutral">
+        <div class="pb-badge" id="fiiBiasBadge">FII</div>
+        <div class="pb-head" id="fiiHeadline">Loading FII conclusion…</div>
+        <div class="pb-body" id="fiiOneLiner">—</div>
+        <ul class="pb-list" id="fiiBullets"></ul>
+        <div class="pb-plans">
+          <div><strong>Pre-market plan:</strong> <span id="fiiPlanPre">—</span></div>
+          <div><strong>Live plan:</strong> <span id="fiiPlanLive">—</span></div>
+        </div>
       </div>
       <div class="meta grid4" style="margin-bottom:12px">
         <div class="card hl">
@@ -142,8 +157,9 @@
           <div class="muted" id="flowHits">—</div>
         </div>
         <div class="card">
-          <label>Match rule</label>
-          <div class="val small" id="matchExplain">OI day T → next session Nifty direction</div>
+          <label>Conviction</label>
+          <div class="big" id="fiiConf">—</div>
+          <div class="muted" id="matchExplain">Not a guarantee — measured lean</div>
         </div>
       </div>
       <div id="fiiBookBlocks" class="edge-blocks"></div>
@@ -235,6 +251,6 @@
   <footer>
     Pre = overnight bias · Live = Upstox continuous · FII = smart money · Structure = Upstox chain · Log = archive · Guide = why
   </footer>
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>

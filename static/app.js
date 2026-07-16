@@ -198,16 +198,18 @@ function setText(id, text) {
   if (n) n.textContent = text;
 }
 
+function paintPlaybook(elRoot, conclusion, gapLine) {
+  if (!elRoot || !conclusion) return;
+  elRoot.className = "playbook " + (conclusion.color || "neutral");
+  const badge = elRoot.querySelector(".pb-badge");
+  if (badge && conclusion.bias) badge.textContent = conclusion.bias;
+}
+
 function renderPre(data) {
   setText("preDateDay", `${data.date || "—"} · ${data.day || ""}`);
   setText(
     "preTrading",
     data.is_trading ? "YES ✅" : `NO ❌ ${data.holiday || data.reason || ""}`
-  );
-  setText("preUpdated", data.last_updated || "—");
-  setText(
-    "preSources",
-    (Array.isArray(data.sources) ? data.sources : []).join(" · ") || "—"
   );
   setText(
     "preGift",
@@ -232,6 +234,24 @@ function renderPre(data) {
     gapCat.textContent = data.gap_category || "—";
     gapCat.className = "tag " + (data.gap_category || "");
   }
+
+  // Pre playbook = FII conclusion + gap
+  const c =
+    data.fii_conclusion ||
+    (data.pro_edge && data.pro_edge.fii_conclusion) ||
+    {};
+  const pb = el("prePlaybook");
+  if (pb) {
+    pb.className = "playbook " + (c.color || "neutral");
+    setText("prePlayHead", c.headline || "FII conclusion pending — open Refresh");
+    setText(
+      "prePlayBody",
+      (c.plan_pre || c.one_liner || "—") +
+        (data.gap_category
+          ? ` · Gap: ${data.gap_category}`
+          : "")
+    );
+  }
   renderGroupTables("preGroups", data.column_groups, TAB_GROUPS.pre);
 }
 
@@ -246,17 +266,58 @@ function renderLive(data) {
       if (n) n.className = "big " + clsFromDisplay(n.textContent, null);
     }
   );
-  renderGroupTables("liveGroups", data.column_groups, TAB_GROUPS.live);
-  // Futures ORB only from pro_edge
+
+  const c =
+    data.fii_conclusion ||
+    (data.pro_edge && data.pro_edge.fii_conclusion) ||
+    {};
+  const pb = el("livePlaybook");
+  if (pb) {
+    pb.className = "playbook " + (c.color || "neutral");
+    setText(
+      "livePlayHead",
+      c.bias
+        ? `Scalp bias: ${c.bias} · aim 25–35 pts`
+        : "Scalp: wait structure + ORB"
+    );
+    setText("livePlayBody", c.plan_live || "Use ATM±3 table below · fade walls · ORB break only with volume");
+  }
+
+  // ATM±3 tables on Live for scalp
+  renderAtmTables("liveAtmHost", data);
   const orb = proBlocksBySection(data, (s) =>
-    /futures ORB|ORB & futures/i.test(s)
+    /futures ORB|ORB & futures|Index futures ORB/i.test(s)
   );
   renderEdgeBlocksInto("liveOrbBlocks", orb);
 }
 
 function renderFii(data) {
+  const c =
+    data.fii_conclusion ||
+    (data.pro_edge && data.pro_edge.fii_conclusion) ||
+    {};
+  const box = el("fiiConclusion");
+  if (box) {
+    box.className = "playbook " + (c.color || "neutral");
+    setText("fiiBiasBadge", c.bias || "FII");
+    setText("fiiHeadline", c.headline || "No conclusion yet — Refresh after 7:30 PM");
+    setText("fiiOneLiner", c.one_liner || "—");
+    setText("fiiPlanPre", c.plan_pre || "—");
+    setText("fiiPlanLive", c.plan_live || "—");
+    setText("fiiConf", c.confidence != null ? c.confidence + "%" : "—");
+    const ul = el("fiiBullets");
+    if (ul) {
+      ul.innerHTML = "";
+      (c.bullets || []).forEach((b) => {
+        const li = document.createElement("li");
+        li.textContent = b;
+        ul.appendChild(li);
+      });
+    }
+  }
+
   const cash =
-    (data.columns || []).find((c) => c.key === "fii_cash_net")?.display ||
+    (data.columns || []).find((col) => col.key === "fii_cash_net")?.display ||
     fmt(data.fii_cash_net ?? data.fii_net);
   setText("fiiCash", cash || "—");
   const n = el("fiiCash");
@@ -267,6 +328,66 @@ function renderFii(data) {
   renderEdgeBlocksInto("fiiBookBlocks", book);
   renderEdgeBlocksInto("fiiScoreBlocks", score);
   renderOi(data);
+}
+
+function renderAtmTables(hostId, data) {
+  const host = el(hostId);
+  if (!host) return;
+  host.innerHTML = "";
+  const pe = (data && data.pro_edge) || {};
+  const list = pe.underlyings || [];
+  if (!list.length) {
+    host.innerHTML =
+      '<div class="edge-empty">ATM±3 table: Upstox token + Refresh. Shows OI & premium Δ 5/15/30m + day.</div>';
+    return;
+  }
+  list.forEach((u) => {
+    const wrap = document.createElement("div");
+    wrap.className = "sheet-wrap";
+    wrap.style.marginBottom = "12px";
+    const atm =
+      u.atm_strike != null
+        ? Number(u.atm_strike).toLocaleString("en-IN")
+        : "—";
+    wrap.innerHTML = `
+      <div class="sheet-title">${u.label || ""} · ATM ${atm} ±3 · exp ${u.expiry || "—"}
+        ${u.pcr_now != null ? ` · PCR ${u.pcr_now}` : ""}
+        ${u.atm_pcr != null ? ` · ATM PCR ${u.atm_pcr}` : ""}
+        <div style="font-weight:400;font-size:11px;color:#5f6368;margin-top:4px">
+          Yellow = ATM · OI/Prem Δ vs 5m · 15m · 30m · day open (~9:15)
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="sheet compact"><thead>
+          <tr>
+            <th>Strike</th><th>Side</th><th>OI</th><th>Prem</th>
+            <th>OI 5m</th><th>OI 15m</th><th>OI 30m</th><th>OI day</th>
+            <th>P 5m</th><th>P 15m</th><th>P 30m</th><th>P day</th>
+          </tr>
+        </thead><tbody></tbody></table>
+      </div>`;
+    const tb = wrap.querySelector("tbody");
+    (u.rows || []).forEach((r) => {
+      const tr = document.createElement("tr");
+      if (r.is_atm) tr.style.background = "#fef9c3";
+      const cells = [
+        r.strike,
+        r.side,
+        r.oi_now != null ? Number(r.oi_now).toLocaleString("en-IN") : "—",
+        r.prem_now != null ? Number(r.prem_now).toFixed(2) : "—",
+        r.oi_5m, r.oi_15m, r.oi_30m, r.oi_day,
+        r.prem_5m, r.prem_15m, r.prem_30m, r.prem_day,
+      ];
+      tr.innerHTML = cells
+        .map((c, i) => {
+          const cls = i >= 4 ? clsFromDisplay(String(c), null) : "";
+          return `<td class="${cls}">${c ?? "—"}</td>`;
+        })
+        .join("");
+      tb.appendChild(tr);
+    });
+    host.appendChild(wrap);
+  });
 }
 
 async function loadStructureDiag() {
@@ -306,126 +427,17 @@ function renderStructure(data) {
     /Option structure/i.test(s)
   );
   renderEdgeBlocksInto("structureBlocks", blocks);
-
-  // ATM time-window tables (5/15/30m + day) — Upstox candles
-  let host = el("structureAtm");
-  if (!host) {
+  renderAtmTables("structureAtm", data);
+  // ensure host exists
+  if (!el("structureAtm")) {
     const panel = el("panel-structure");
     if (panel) {
-      host = document.createElement("div");
-      host.id = "structureAtm";
-      panel.appendChild(host);
+      const h = document.createElement("div");
+      h.id = "structureAtm";
+      panel.appendChild(h);
+      renderAtmTables("structureAtm", data);
     }
   }
-  if (!host) return;
-  host.innerHTML = "";
-  const pe = (data && data.pro_edge) || {};
-  const struct = (pe.blocks || []).find((b) =>
-    /Option structure/i.test(String(b.section || ""))
-  );
-  const unders = (struct && struct.underlyings) || pe.underlyings || [];
-  // underlyings may live on structure block
-  const list =
-    unders.length
-      ? unders
-      : (pe.blocks || [])
-          .filter((b) => b.underlyings)
-          .flatMap((b) => b.underlyings || []);
-
-  if (!list.length) {
-    host.innerHTML =
-      '<div class="edge-empty">ATM 5/15/30m table after Upstox chain loads (token + Refresh).</div>';
-    return;
-  }
-
-  list.forEach((u) => {
-    const wrap = document.createElement("div");
-    wrap.className = "sheet-wrap";
-    wrap.style.marginTop = "14px";
-    const atm = u.atm_strike != null ? Number(u.atm_strike).toLocaleString("en-IN") : "—";
-    const pcr =
-      u.atm_pcr != null
-        ? `ATM PCR ${u.atm_pcr}`
-        : u.pcr_now != null
-          ? `Chain PCR ${u.pcr_now}`
-          : "";
-    wrap.innerHTML = `
-      <div class="sheet-title">${u.label || ""} · ATM ${atm} · exp ${u.expiry || "—"} · ${pcr}
-        <div style="font-weight:400;font-size:11px;color:#5f6368;margin-top:4px">
-          OI & premium change vs 5m / 15m / 30m ago and vs day open (~9:15) — Upstox 1-min candles
-        </div>
-      </div>
-      <div class="table-scroll">
-        <table class="sheet compact">
-          <thead>
-            <tr>
-              <th>Side</th>
-              <th>OI now</th>
-              <th>Prem now</th>
-              <th>OI Δ 5m</th>
-              <th>OI Δ 15m</th>
-              <th>OI Δ 30m</th>
-              <th>OI Δ day</th>
-              <th>Prem Δ 5m</th>
-              <th>Prem Δ 15m</th>
-              <th>Prem Δ 30m</th>
-              <th>Prem Δ day</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>`;
-    const tbody = wrap.querySelector("tbody");
-    (u.rows || []).forEach((r) => {
-      const tr = document.createElement("tr");
-      const cells = [
-        r.side,
-        r.oi_now != null ? Number(r.oi_now).toLocaleString("en-IN") : "—",
-        r.prem_now != null ? Number(r.prem_now).toFixed(2) : "—",
-        r.oi_5m,
-        r.oi_15m,
-        r.oi_30m,
-        r.oi_day,
-        r.prem_5m,
-        r.prem_15m,
-        r.prem_30m,
-        r.prem_day,
-      ];
-      tr.innerHTML = cells
-        .map((c, i) => {
-          const cls = i >= 3 ? clsFromDisplay(String(c), null) : "";
-          return `<td class="${cls}">${c ?? "—"}</td>`;
-        })
-        .join("");
-      tbody.appendChild(tr);
-    });
-    // spot price windows row
-    const sw = u.spot_windows || {};
-    if (sw.prem_chg) {
-      const tr = document.createElement("tr");
-      tr.style.background = "#f8fafc";
-      tr.innerHTML = `
-        <td><strong>Spot price</strong></td>
-        <td colspan="2">${u.spot != null ? Number(u.spot).toFixed(2) : "—"}</td>
-        <td class="${clsFromDisplay(String(_fmtSpot(sw, "5m")), null)}">${_fmtSpot(sw, "5m")}</td>
-        <td class="${clsFromDisplay(String(_fmtSpot(sw, "15m")), null)}">${_fmtSpot(sw, "15m")}</td>
-        <td class="${clsFromDisplay(String(_fmtSpot(sw, "30m")), null)}">${_fmtSpot(sw, "30m")}</td>
-        <td class="${clsFromDisplay(String(_fmtSpot(sw, "day")), null)}">${_fmtSpot(sw, "day")}</td>
-        <td colspan="4" style="color:#5f6368;font-size:11px">Index price Δ (not option premium)</td>`;
-      tbody.appendChild(tr);
-    }
-    host.appendChild(wrap);
-  });
-}
-
-function _fmtSpot(sw, key) {
-  const n = (sw.prem_chg || {})[key];
-  const p = (sw.prem_chg_pct || {})[key];
-  if (n == null) return "—";
-  const sign = n > 0 ? "+" : "";
-  const s = `${sign}${Number(n).toFixed(2)}`;
-  if (p != null) return `${s} (${p > 0 ? "+" : ""}${p}%)`;
-  return s;
 }
 
 function renderSnapshot(data) {
@@ -816,7 +828,7 @@ async function pollLiveIndices() {
 }
 
 // Continuous live: every 10s (Upstox quotes only — cheap)
-const LIVE_MS = 10 * 1000;
+// Continuous live: every 3s — Upstox quotes (no manual refresh)
+const LIVE_MS = 3 * 1000;
 setInterval(pollLiveIndices, LIVE_MS);
-// kick immediately on load
-setTimeout(pollLiveIndices, 800);
+setTimeout(pollLiveIndices, 500);

@@ -16,6 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app import upstox_api as ux
+from app.fii_conclusion import build_fii_conclusion
 from app.nse_oi import download_oi_for_date, enrich_participant, parse_participant_csv
 
 log = logging.getLogger(__name__)
@@ -215,6 +216,7 @@ def build_fii_only(series: list[dict] | None = None) -> dict[str, Any]:
         "section": "FII book (futures + options)",
         "oi_date": cur.get("oi_date"),
         "cards": cards,
+        "series": series,
         "note": "Source: NSE fao_participant_oi CSV · FII row only · Δ = vs previous session",
     }
 
@@ -397,7 +399,7 @@ def build_upstox_option_structure() -> dict[str, Any]:
                 )
             )
 
-        # ATM CE/PE windows via 1-min candles (OI + premium)
+        # ATM ±3 strikes — OI + premium windows via 1-min candles
         atm_block: dict[str, Any] = {
             "label": label,
             "spot": sp,
@@ -406,32 +408,27 @@ def build_upstox_option_structure() -> dict[str, Any]:
             "pcr_now": pcr_now,
             "pcr_day_chg": pcr_day_chg,
             "spot_windows": spot_win,
-            "ce": None,
-            "pe": None,
-            "rows": [],  # table rows for UI
+            "rows": [],
         }
-        if atm:
-            ce_key, pe_key = atm.get("ce_key"), atm.get("pe_key")
-            ce_w = ux.oi_premium_windows(ce_key) if ce_key else {}
-            pe_w = ux.oi_premium_windows(pe_key) if pe_key else {}
-            atm_block["ce"] = {
-                "key": ce_key,
-                "ltp": atm.get("ce_ltp"),
-                "oi": atm.get("ce_oi"),
-                "windows": ce_w,
-            }
-            atm_block["pe"] = {
-                "key": pe_key,
-                "ltp": atm.get("pe_ltp"),
-                "oi": atm.get("pe_oi"),
-                "windows": pe_w,
-            }
+        if atm and sp:
+            # strikes sorted near ATM
+            ordered = sorted(rows, key=lambda r: abs(r["strike"] - sp))
+            # take unique strikes around ATM ±3 steps
+            strikes_sorted = sorted({r["strike"] for r in rows})
+            try:
+                ai = min(range(len(strikes_sorted)), key=lambda i: abs(strikes_sorted[i] - sp))
+            except ValueError:
+                ai = 0
+            lo, hi = max(0, ai - 3), min(len(strikes_sorted), ai + 4)
+            band = set(strikes_sorted[lo:hi])
+            band_rows = [r for r in rows if r["strike"] in band]
+            band_rows.sort(key=lambda r: r["strike"])
 
-            def row(side: str, w: dict, live_oi: Any, live_ltp: Any) -> dict:
+            def row(side: str, strike: float, w: dict, live_oi: Any, live_ltp: Any) -> dict:
                 now = (w or {}).get("now") or {}
                 return {
                     "side": side,
-                    "strike": atm["strike"],
+                    "strike": strike,
                     "oi_now": now.get("oi") if now.get("oi") is not None else live_oi,
                     "prem_now": now.get("close") if now.get("close") is not None else live_ltp,
                     "oi_5m": _fmt_chg((w or {}).get("oi_chg", {}).get("5m"), (w or {}).get("oi_chg_pct", {}).get("5m")),
@@ -442,19 +439,26 @@ def build_upstox_option_structure() -> dict[str, Any]:
                     "prem_15m": _fmt_chg((w or {}).get("prem_chg", {}).get("15m"), (w or {}).get("prem_chg_pct", {}).get("15m")),
                     "prem_30m": _fmt_chg((w or {}).get("prem_chg", {}).get("30m"), (w or {}).get("prem_chg_pct", {}).get("30m")),
                     "prem_day": _fmt_chg((w or {}).get("prem_chg", {}).get("day"), (w or {}).get("prem_chg_pct", {}).get("day")),
+                    "is_atm": atm is not None and abs(strike - atm["strike"]) < 0.01,
                 }
 
-            atm_block["rows"] = [
-                row("ATM CE", ce_w, atm.get("ce_oi"), atm.get("ce_ltp")),
-                row("ATM PE", pe_w, atm.get("pe_oi"), atm.get("pe_ltp")),
-            ]
-            # Combined OI PCR proxy at ATM: pe_oi/ce_oi now
-            ce_oi_n = atm_block["rows"][0].get("oi_now")
-            pe_oi_n = atm_block["rows"][1].get("oi_now")
+            # Limit candle fetches: ATM ±3 = 7 strikes × 2 sides = 14 calls — OK
+            for r in band_rows:
+                ce_w = ux.oi_premium_windows(r["ce_key"]) if r.get("ce_key") else {}
+                pe_w = ux.oi_premium_windows(r["pe_key"]) if r.get("pe_key") else {}
+                atm_block["rows"].append(
+                    row("CE", r["strike"], ce_w, r.get("ce_oi"), r.get("ce_ltp"))
+                )
+                atm_block["rows"].append(
+                    row("PE", r["strike"], pe_w, r.get("pe_oi"), r.get("pe_ltp"))
+                )
+
+            # ATM PCR
             try:
-                if ce_oi_n and pe_oi_n and float(ce_oi_n):
-                    atm_block["atm_pcr"] = round(float(pe_oi_n) / float(ce_oi_n), 3)
-            except (TypeError, ValueError):
+                ar = next(x for x in band_rows if abs(x["strike"] - atm["strike"]) < 0.01)
+                if ar.get("ce_oi"):
+                    atm_block["atm_pcr"] = round(float(ar["pe_oi"]) / float(ar["ce_oi"]), 3)
+            except (StopIteration, TypeError, ValueError, ZeroDivisionError):
                 pass
 
         underlyings.append(atm_block)
@@ -620,11 +624,24 @@ def build_pro_edge(context: dict[str, Any] | None = None) -> dict[str, Any]:
     fii_week = context.get("fii_week")
 
     fii_block = build_fii_only()
+    conclusion = build_fii_conclusion(
+        fii_block.get("series"),
+        fii_week,
+        {
+            "gap_pct": context.get("gap_pct"),
+            "gap_category": context.get("gap_category"),
+        },
+    )
+    # don't ship full series to frontend JSON (size)
+    fii_block.pop("series", None)
+
     opt_block = build_upstox_option_structure()
     orb_block = build_futures_orb()
     score_block = build_scorecard(fii_week)
 
     signals = []
+    if conclusion.get("headline"):
+        signals.append(conclusion["headline"])
     for block in (fii_block, opt_block, orb_block):
         for c in block.get("cards") or []:
             if c.get("signal"):
@@ -634,10 +651,11 @@ def build_pro_edge(context: dict[str, Any] | None = None) -> dict[str, Any]:
         "built_at": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S IST"),
         "headline": "Pro Edge — FII only",
         "blurb": (
-            "FII book + Upstox structure (ATM OI/premium 5/15/30m/day) + "
-            "futures ORB + FII hit-rate. No tape duplicates."
+            "FII conclusion first · book details · Upstox ATM±3 OI/premium windows · "
+            "futures ORB · hit-rate. No tape duplicates."
         ),
         "active_signals": signals[:10],
+        "fii_conclusion": conclusion,
         "blocks": [fii_block, opt_block, orb_block, score_block],
         "underlyings": opt_block.get("underlyings") or [],
     }
