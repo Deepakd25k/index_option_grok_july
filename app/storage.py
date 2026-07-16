@@ -113,7 +113,7 @@ def _prune_and_roll(daily: list[dict]) -> list[dict]:
         existing = {w.get("week"): w for w in weekly}
         for wk, items in buckets.items():
             fields = [
-                "nifty", "banknifty", "vix", "gift", "dow", "spx", "nasdaq",
+                "nifty", "banknifty", "sensex", "vix", "gift", "dow", "spx", "nasdaq",
                 "nikkei", "hsi", "fii_net", "dii_net", "pcr", "sentiment",
                 "gap_pct",
             ]

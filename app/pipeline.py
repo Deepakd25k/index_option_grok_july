@@ -10,6 +10,7 @@ from app.fetchers import (
     fetch_mrchartist,
     fetch_upstox_all,
     fetch_yahoo_all,
+    format_price_chg,
     parse_fii_date,
     upstox_enabled,
 )
@@ -84,23 +85,54 @@ def run_refresh() -> dict[str, Any]:
     def pick(key: str) -> float | None:
         v = upstox.get(key)
         if v is not None:
-            return float(v)
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
         v = yahoo.get(key)
-        return float(v) if v is not None else None
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+        return None
 
-    nifty = pick("nifty")
-    bank = pick("banknifty")
-    vix = pick("vix")
-    gift = pick("gift")
-    dow = pick("dow")
-    spx = pick("spx")
-    nasdaq = pick("nasdaq")
-    nikkei = pick("nikkei")
-    hsi = pick("hsi")
-    ftse = pick("ftse")
-    dax = pick("dax")
-    cac = pick("cac")
-    stoxx50 = pick("stoxx50")
+    def pick_chg_pct(key: str) -> float | None:
+        for src in (upstox, yahoo):
+            v = src.get(f"{key}_chg_pct")
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    def pick_display(key: str) -> str | None:
+        """Prefer source display with (chg%); else build from price + chg_pct."""
+        for src in (upstox, yahoo):
+            d = src.get(f"{key}_display")
+            if d:
+                return str(d)
+        price = pick(key)
+        return format_price_chg(price, pick_chg_pct(key))
+
+    def px(key: str) -> tuple[float | None, float | None, str | None]:
+        return pick(key), pick_chg_pct(key), pick_display(key)
+
+    nifty, nifty_chg, nifty_d = px("nifty")
+    bank, bank_chg, bank_d = px("banknifty")
+    sensex, sensex_chg, sensex_d = px("sensex")
+    vix, vix_chg, vix_d = px("vix")
+    gift, gift_chg, gift_d = px("gift")
+    dow, dow_chg, dow_d = px("dow")
+    spx, spx_chg, spx_d = px("spx")
+    nasdaq, nasdaq_chg, nasdaq_d = px("nasdaq")
+    nikkei, nikkei_chg, nikkei_d = px("nikkei")
+    hsi, hsi_chg, hsi_d = px("hsi")
+    ftse, ftse_chg, ftse_d = px("ftse")
+    dax, dax_chg, dax_d = px("dax")
+    cac, cac_chg, cac_d = px("cac")
+    stoxx50, stoxx50_chg, stoxx50_d = px("stoxx50")
 
     # ── Cash FII/DII (MrChartist free) ──
     fii_net = dii_net = None
@@ -158,10 +190,56 @@ def run_refresh() -> dict[str, Any]:
     # ── Gap ──
     gap_pts = gap_pct = None
     gap_cat = ""
+    gap_pts_d = gap_pct_d = None
     if gift is not None and nifty is not None and nifty != 0:
         gap_pts = gift - nifty
         gap_pct = gap_pts / nifty
         gap_cat = gap_category(gap_pct)
+        sign = "+" if gap_pts > 0 else ""
+        gap_pts_d = f"{gap_pts:,.2f} ({sign}{gap_pct * 100:.2f}%)"
+        gap_pct_d = f"{sign}{gap_pct * 100:.2f}%"
+
+    # FII/DII cash: day-over-day change % vs previous stored session
+    fii_d = dii_d = None
+    try:
+        hist = storage.load_daily()
+        prev_fii = prev_dii = None
+        for h in hist:
+            if h.get("date") and h.get("date") != ymd:
+                if h.get("fii_cash_net") is not None and prev_fii is None:
+                    prev_fii = h.get("fii_cash_net")
+                if h.get("dii_cash_net") is not None and prev_dii is None:
+                    prev_dii = h.get("dii_cash_net")
+                if prev_fii is not None and prev_dii is not None:
+                    break
+        if fii_net is not None:
+            if prev_fii not in (None, 0):
+                fii_chg = 100.0 * (float(fii_net) - float(prev_fii)) / abs(float(prev_fii))
+                sign = "+" if fii_net > 0 else ""
+                fii_d = f"{sign}{float(fii_net):,.2f} ({'+' if fii_chg > 0 else ''}{fii_chg:.1f}% vs prev)"
+            else:
+                sign = "+" if fii_net > 0 else ""
+                fii_d = f"{sign}{float(fii_net):,.2f}"
+        if dii_net is not None:
+            if prev_dii not in (None, 0):
+                dii_chg = 100.0 * (float(dii_net) - float(prev_dii)) / abs(float(prev_dii))
+                sign = "+" if dii_net > 0 else ""
+                dii_d = f"{sign}{float(dii_net):,.2f} ({'+' if dii_chg > 0 else ''}{dii_chg:.1f}% vs prev)"
+            else:
+                sign = "+" if dii_net > 0 else ""
+                dii_d = f"{sign}{float(dii_net):,.2f}"
+    except Exception:
+        if fii_net is not None:
+            fii_d = f"{float(fii_net):,.2f}"
+        if dii_net is not None:
+            dii_d = f"{float(dii_net):,.2f}"
+
+    def _idx_col(key, label, val, chg, disp, group, why, when, src="Upstox/Yahoo"):
+        return _col(
+            key, label, val,
+            display=disp or format_price_chg(val, chg),
+            group=group, why=why, when=when, src=src, fmt="display",
+        )
 
     # ── Column-wise structure (groups for UI) ──
     columns: list[dict[str, Any]] = [
@@ -179,40 +257,41 @@ def run_refresh() -> dict[str, Any]:
             src="NSE calendar",
             fmt="text",
         ),
-        # India indices
-        _col("nifty", "Nifty 50 Close", nifty, group="India", why="Base for gap + trend reference", when="Pre-market + close", src="Upstox/Yahoo"),
-        _col("banknifty", "BankNifty Close", bank, group="India", why="Bank-heavy days / which index to trade", when="Pre-market + close", src="Upstox/Yahoo"),
-        _col("vix", "India VIX", vix, group="India", why="Low=range day, High=big moves / premium", when="Pre-market; spikes on events", src="Upstox/Yahoo"),
+        # India — value (day chg %)
+        _idx_col("nifty", "Nifty 50 Close", nifty, nifty_chg, nifty_d, "India", "Base for gap + trend reference", "Pre-market + close"),
+        _idx_col("banknifty", "BankNifty Close", bank, bank_chg, bank_d, "India", "Bank-heavy days / which index to trade", "Pre-market + close"),
+        _idx_col("sensex", "Sensex (BSE)", sensex, sensex_chg, sensex_d, "India", "BSE broad market; confirm Nifty bias", "Pre-market + close"),
+        _idx_col("vix", "India VIX", vix, vix_chg, vix_d, "India", "Low=range day, High=big moves / premium", "Pre-market; spikes on events"),
         # GIFT + Gap
-        _col("gift", "GIFT Nifty", gift, group="Gap", why="Strongest overnight lead for Nifty open", when="Pre-market (early morning)", src="Upstox GLOBAL"),
-        _col("gap_pts", "Expected Gap Pts", gap_pts, group="Gap", why="Open expectation in points", when="Pre-market after GIFT", src="GIFT−Nifty"),
+        _idx_col("gift", "GIFT Nifty", gift, gift_chg, gift_d, "Gap", "Strongest overnight lead for Nifty open", "Pre-market (early morning)", "Upstox GLOBAL"),
+        _col("gap_pts", "Expected Gap Pts", gap_pts, display=gap_pts_d, group="Gap", why="Open expectation in points (+ % of Nifty)", when="Pre-market after GIFT", src="GIFT−Nifty", fmt="display"),
         _col(
             "gap_pct",
             "Expected Gap %",
             gap_pct,
-            display=f"{gap_pct * 100:.2f}%" if gap_pct is not None else None,
+            display=gap_pct_d,
             group="Gap",
             why="ORB / gap-fill rules",
             when="Pre-market",
             src="formula",
-            fmt="pct",
+            fmt="display",
         ),
         _col("gap_category", "Gap Category", gap_cat, group="Gap", why="Small/Med/Large → different ORB plan", when="Pre-market", src="formula", fmt="text"),
         # US
-        _col("dow", "Dow Jones", dow, group="US", why="US risk-on/off overnight bias", when="Before India open (US close already done)", src="Upstox/Yahoo"),
-        _col("spx", "S&P 500", spx, group="US", why="Global equity beta", when="Pre-market", src="Upstox/Yahoo"),
-        _col("nasdaq", "Nasdaq / US Tech", nasdaq, group="US", why="Tech / growth risk appetite", when="Pre-market", src="Upstox/Yahoo"),
+        _idx_col("dow", "Dow Jones", dow, dow_chg, dow_d, "US", "US risk-on/off overnight bias", "Before India open (US close already done)"),
+        _idx_col("spx", "S&P 500", spx, spx_chg, spx_d, "US", "Global equity beta", "Pre-market"),
+        _idx_col("nasdaq", "Nasdaq / US Tech", nasdaq, nasdaq_chg, nasdaq_d, "US", "Tech / growth risk appetite", "Pre-market"),
         # Asia
-        _col("nikkei", "Nikkei 225", nikkei, group="Asia", why="Japan risk; Asia open spillover", when="Early India morning", src="Upstox/Yahoo"),
-        _col("hsi", "Hang Seng", hsi, group="Asia", why="China/HK risk; FII Asia flow mood", when="Early India morning", src="Upstox/Yahoo"),
+        _idx_col("nikkei", "Nikkei 225", nikkei, nikkei_chg, nikkei_d, "Asia", "Japan risk; Asia open spillover", "Early India morning"),
+        _idx_col("hsi", "Hang Seng", hsi, hsi_chg, hsi_d, "Asia", "China/HK risk; FII Asia flow mood", "Early India morning"),
         # Europe
-        _col("ftse", "FTSE 100 (UK)", ftse, group="Europe", why="Europe risk; London close vs Asia open timing", when="India morning (Europe still trading / prior close)", src="Yahoo"),
-        _col("dax", "DAX (Germany)", dax, group="Europe", why="Eurozone industrial risk appetite", when="India morning", src="Yahoo"),
-        _col("cac", "CAC 40 (France)", cac, group="Europe", why="Eurozone confirmation with DAX", when="India morning", src="Yahoo"),
-        _col("stoxx50", "EURO STOXX 50", stoxx50, group="Europe", why="Broad Europe blue-chip bias", when="India morning", src="Yahoo"),
+        _idx_col("ftse", "FTSE 100 (UK)", ftse, ftse_chg, ftse_d, "Europe", "Europe risk; London close vs Asia open timing", "India morning", "Yahoo"),
+        _idx_col("dax", "DAX (Germany)", dax, dax_chg, dax_d, "Europe", "Eurozone industrial risk appetite", "India morning", "Yahoo"),
+        _idx_col("cac", "CAC 40 (France)", cac, cac_chg, cac_d, "Europe", "Eurozone confirmation with DAX", "India morning", "Yahoo"),
+        _idx_col("stoxx50", "EURO STOXX 50", stoxx50, stoxx50_chg, stoxx50_d, "Europe", "Broad Europe blue-chip bias", "India morning", "Yahoo"),
         # Cash
-        _col("fii_cash_net", "FII Cash Net ₹Cr", fii_net, group="Cash Flow", why="Foreign cash buying/selling pressure", when="Evening provisional; next morning confirmed", src="MrChartist/NSE"),
-        _col("dii_cash_net", "DII Cash Net ₹Cr", dii_net, group="Cash Flow", why="Domestic absorption of FII selling", when="Same as FII cash", src="MrChartist/NSE"),
+        _col("fii_cash_net", "FII Cash Net ₹Cr", fii_net, display=fii_d, group="Cash Flow", why="Foreign cash buying/selling pressure", when="Evening provisional; next morning confirmed", src="MrChartist/NSE", fmt="display"),
+        _col("dii_cash_net", "DII Cash Net ₹Cr", dii_net, display=dii_d, group="Cash Flow", why="Domestic absorption of FII selling", when="Same as FII cash", src="MrChartist/NSE", fmt="display"),
         # NSE OI — the edge
         _col(
             "fii_idx_fut_long",
@@ -282,21 +361,50 @@ def run_refresh() -> dict[str, Any]:
         "is_trading": trading["is_trading"],
         "holiday": trading["holiday"],
         "nifty": nifty,
+        "nifty_chg_pct": nifty_chg,
+        "nifty_display": nifty_d,
         "banknifty": bank,
+        "banknifty_chg_pct": bank_chg,
+        "banknifty_display": bank_d,
+        "sensex": sensex,
+        "sensex_chg_pct": sensex_chg,
+        "sensex_display": sensex_d,
         "vix": vix,
+        "vix_chg_pct": vix_chg,
+        "vix_display": vix_d,
         "gift": gift,
+        "gift_chg_pct": gift_chg,
+        "gift_display": gift_d,
         "gap_pts": gap_pts,
         "gap_pct": gap_pct,
         "gap_category": gap_cat,
         "dow": dow,
+        "dow_chg_pct": dow_chg,
+        "dow_display": dow_d,
         "spx": spx,
+        "spx_chg_pct": spx_chg,
+        "spx_display": spx_d,
         "nasdaq": nasdaq,
+        "nasdaq_chg_pct": nasdaq_chg,
+        "nasdaq_display": nasdaq_d,
         "nikkei": nikkei,
+        "nikkei_chg_pct": nikkei_chg,
+        "nikkei_display": nikkei_d,
         "hsi": hsi,
+        "hsi_chg_pct": hsi_chg,
+        "hsi_display": hsi_d,
         "ftse": ftse,
+        "ftse_chg_pct": ftse_chg,
+        "ftse_display": ftse_d,
         "dax": dax,
+        "dax_chg_pct": dax_chg,
+        "dax_display": dax_d,
         "cac": cac,
+        "cac_chg_pct": cac_chg,
+        "cac_display": cac_d,
         "stoxx50": stoxx50,
+        "stoxx50_chg_pct": stoxx50_chg,
+        "stoxx50_display": stoxx50_d,
         "fii_cash_net": fii_net,
         "dii_cash_net": dii_net,
         "fii_idx_fut_long": fut_l,

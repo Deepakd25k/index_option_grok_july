@@ -13,11 +13,35 @@ log = logging.getLogger(__name__)
 UA = {"User-Agent": "PremarketDashboard/1.0", "Accept": "application/json"}
 
 
+def format_price_chg(price: float | None, chg_pct: float | None, digits: int = 2) -> str | None:
+    """24078.50 (+0.11%) style — actual day change % in brackets."""
+    if price is None:
+        return None
+    p = f"{price:,.{digits}f}"
+    if chg_pct is None:
+        return p
+    sign = "+" if chg_pct > 0 else ""
+    return f"{p} ({sign}{chg_pct:.2f}%)"
+
+
+def _chg_pct(price: float | None, prev: float | None) -> float | None:
+    if price is None or prev is None or prev == 0:
+        return None
+    return round(100.0 * (price - prev) / prev, 2)
+
+
+def _chg_abs(price: float | None, prev: float | None) -> float | None:
+    if price is None or prev is None:
+        return None
+    return round(price - prev, 4)
+
+
 # ── Yahoo (always free, no key) ──────────────────────────────
-def yahoo_quote(symbol: str) -> float | None:
+def yahoo_quote(symbol: str) -> dict[str, float | None] | None:
+    """Return {price, prev, chg, chg_pct} for a Yahoo symbol."""
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/"
-        f"{quote(symbol, safe='')}?interval=1d&range=5d"
+        f"{quote(symbol, safe='')}?interval=1d&range=10d"
     )
     try:
         r = requests.get(url, headers=UA, timeout=15)
@@ -28,18 +52,66 @@ def yahoo_quote(symbol: str) -> float | None:
             return None
         meta = result[0].get("meta") or {}
         closes = ((result[0].get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
-        for c in reversed(closes):
-            if c is not None:
-                return float(c)
-        p = meta.get("regularMarketPrice") or meta.get("chartPreviousClose")
-        return float(p) if p is not None else None
+
+        # last two non-null closes
+        non_null = [float(c) for c in closes if c is not None]
+        last = non_null[-1] if non_null else None
+        prev_close = non_null[-2] if len(non_null) >= 2 else None
+
+        # Prefer meta when available (intraday accurate)
+        price = meta.get("regularMarketPrice")
+        if price is not None:
+            price = float(price)
+        else:
+            price = last
+
+        chart_prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        if chart_prev is not None:
+            prev = float(chart_prev)
+        else:
+            prev = prev_close
+
+        # If price is last close and prev is chartPreviousClose, good for closed session.
+        # If only one close, try previousClose from meta only.
+        chg_pct = _chg_pct(price, prev)
+        chg = _chg_abs(price, prev)
+
+        # meta sometimes has regularMarketChangePercent already (fraction or %)
+        meta_chg = meta.get("regularMarketChangePercent")
+        if meta_chg is not None and chg_pct is None:
+            try:
+                mc = float(meta_chg)
+                # Yahoo chart meta often stores as percent points already in some feeds
+                chg_pct = round(mc if abs(mc) < 50 else mc, 2)
+            except (TypeError, ValueError):
+                pass
+
+        return {
+            "price": price,
+            "prev": prev,
+            "chg": chg,
+            "chg_pct": chg_pct,
+            "display": format_price_chg(price, chg_pct),
+        }
     except Exception as e:
         log.warning("Yahoo %s: %s", symbol, e)
         return None
 
 
-def fetch_yahoo_all() -> dict[str, float | None]:
-    return {k: yahoo_quote(sym) for k, sym in YAHOO.items()}
+def fetch_yahoo_all() -> dict[str, Any]:
+    """Map name → quote dict (price/prev/chg_pct/display)."""
+    out: dict[str, Any] = {}
+    for k, sym in YAHOO.items():
+        q = yahoo_quote(sym)
+        if not q:
+            out[k] = None
+            continue
+        out[k] = q["price"]
+        out[f"{k}_prev"] = q["prev"]
+        out[f"{k}_chg"] = q["chg"]
+        out[f"{k}_chg_pct"] = q["chg_pct"]
+        out[f"{k}_display"] = q["display"]
+    return out
 
 
 # ── Upstox ───────────────────────────────────────────────────
@@ -55,10 +127,8 @@ def upstox_headers() -> dict[str, str]:
 
 
 def upstox_quotes(keys: list[str]) -> dict[str, dict[str, Any]]:
-    """Full market quotes for instrument keys. Returns map instrument_key → quote dict."""
     if not upstox_enabled() or not keys:
         return {}
-    # Upstox allows comma-separated instrument_key
     joined = ",".join(keys)
     url = f"{UPSTOX_BASE}/market-quote/quotes"
     try:
@@ -71,12 +141,10 @@ def upstox_quotes(keys: list[str]) -> dict[str, dict[str, Any]]:
         if r.status_code != 200:
             log.warning("Upstox quotes HTTP %s: %s", r.status_code, r.text[:300])
             return {}
-        data = (r.json().get("data") or {})
-        # Keys in response may use colon instead of pipe
+        data = r.json().get("data") or {}
         out: dict[str, dict] = {}
         for k, v in data.items():
             out[k] = v
-            # also store normalized with |
             out[k.replace(":", "|")] = v
         return out
     except Exception as e:
@@ -92,7 +160,10 @@ def extract_ltp(q: dict | None) -> float | None:
         ("ltp",),
         ("ohlc", "close"),
         ("close",),
+        ("net_change",),  # skip
     ):
+        if path[0] == "net_change":
+            continue
         cur: Any = q
         ok = True
         for p in path:
@@ -112,7 +183,7 @@ def extract_ltp(q: dict | None) -> float | None:
 def extract_prev_close(q: dict | None) -> float | None:
     if not q:
         return None
-    for key in ("close_price", "previous_close", "prev_close"):
+    for key in ("close_price", "previous_close", "prev_close", "cp"):
         if q.get(key) is not None:
             try:
                 return float(q[key])
@@ -124,25 +195,45 @@ def extract_prev_close(q: dict | None) -> float | None:
             return float(ohlc["close"])
         except (TypeError, ValueError):
             pass
-    return extract_ltp(q)
+    return None
 
 
-def fetch_upstox_all() -> dict[str, float | None]:
+def extract_net_change_pct(q: dict | None) -> float | None:
+    """Upstox often exposes net_change / percentage fields."""
+    if not q:
+        return None
+    for key in ("percentage_change", "pChange", "net_change_percentage", "change_percent"):
+        if q.get(key) is not None:
+            try:
+                return round(float(q[key]), 2)
+            except (TypeError, ValueError):
+                pass
+    # compute from last + prev
+    ltp = extract_ltp(q)
+    prev = extract_prev_close(q)
+    return _chg_pct(ltp, prev)
+
+
+def fetch_upstox_all() -> dict[str, Any]:
     keys = list(INSTRUMENTS.values())
     raw = upstox_quotes(keys)
-    out: dict[str, float | None] = {}
+    out: dict[str, Any] = {}
     for name, ikey in INSTRUMENTS.items():
         q = raw.get(ikey) or raw.get(ikey.replace("|", ":"))
-        # Prefer LTP for live (GIFT), close for indices after hours
         ltp = extract_ltp(q)
         prev = extract_prev_close(q)
-        if name == "gift":
-            out[name] = ltp or prev
-        else:
-            # last session reference: prev close preferred for gap base
-            out[name] = prev or ltp
+        # Prefer live LTP when available (esp. GIFT)
+        price = ltp or prev
+        chg_pct = extract_net_change_pct(q)
+        if chg_pct is None:
+            chg_pct = _chg_pct(price, prev)
+        chg = _chg_abs(price, prev)
+        out[name] = price
         out[f"{name}_ltp"] = ltp
         out[f"{name}_prev"] = prev
+        out[f"{name}_chg"] = chg
+        out[f"{name}_chg_pct"] = chg_pct
+        out[f"{name}_display"] = format_price_chg(price, chg_pct)
     return out
 
 

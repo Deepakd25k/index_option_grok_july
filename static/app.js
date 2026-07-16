@@ -36,6 +36,21 @@ function displayCell(col) {
   return fmt(col.value);
 }
 
+/** Color class for "123 (+1.2%)" style strings */
+function clsFromDisplay(display, value) {
+  if (typeof display === "string") {
+    const m = display.match(/\(([+-]?\d+(?:\.\d+)?)%\)/);
+    if (m) {
+      const n = Number(m[1]);
+      if (n > 0) return "num-pos";
+      if (n < 0) return "num-neg";
+    }
+    if (display.includes("(+") || /\(\+/.test(display)) return "num-pos";
+    if (/\(-\d/.test(display)) return "num-neg";
+  }
+  return clsNum(value);
+}
+
 /** Switch Sheet / FII OI / Daily Log / Significance */
 function switchTab(name) {
   const tabName = name || "sheet";
@@ -83,29 +98,48 @@ function renderSnapshot(data) {
   );
 
   setText(
-    "gapPts",
-    data.gap_pts != null ? fmt(data.gap_pts) + " pts" : "—"
-  );
-  setText(
     "gapPct",
-    data.gap_pct != null ? fmt(data.gap_pct, { pct: true }) : "—"
+    data.gap_pct != null
+      ? `${data.gap_pct >= 0 ? "+" : ""}${(Number(data.gap_pct) * 100).toFixed(2)}%`
+      : "—"
   );
   const gapCat = el("gapCat");
   if (gapCat) {
     gapCat.textContent = data.gap_category || "—";
     gapCat.className = "tag " + (data.gap_category || "");
   }
-  setText("gift", fmt(data.gift));
+  // Prefer "price (chg%)" display strings everywhere
+  setText(
+    "gift",
+    data.gift_display ||
+      (data.gift_chg_pct != null
+        ? `${fmt(data.gift)} (${data.gift_chg_pct > 0 ? "+" : ""}${Number(data.gift_chg_pct).toFixed(2)}%)`
+        : fmt(data.gift))
+  );
+  setText(
+    "gapPts",
+    data.gap_pts != null
+      ? data.gap_pct != null
+        ? `${fmt(data.gap_pts)} pts (${data.gap_pct >= 0 ? "+" : ""}${(data.gap_pct * 100).toFixed(2)}%)`
+        : fmt(data.gap_pts) + " pts"
+      : "—"
+  );
 
   const fii = el("fii");
   const dii = el("dii");
   if (fii) {
-    fii.textContent = fmt(data.fii_cash_net ?? data.fii_net);
-    fii.className = clsNum(data.fii_cash_net ?? data.fii_net);
+    const raw = data.fii_cash_net ?? data.fii_net;
+    fii.textContent =
+      (data.columns || []).find((c) => c.key === "fii_cash_net")?.display ||
+      fmt(raw);
+    fii.className = clsNum(raw);
   }
   if (dii) {
-    dii.textContent = fmt(data.dii_cash_net ?? data.dii_net);
-    dii.className = clsNum(data.dii_cash_net ?? data.dii_net);
+    const raw = data.dii_cash_net ?? data.dii_net;
+    dii.textContent =
+      (data.columns || []).find((c) => c.key === "dii_cash_net")?.display ||
+      fmt(raw);
+    dii.className = clsNum(raw);
   }
 
   setText(
@@ -150,7 +184,7 @@ function renderSnapshot(data) {
       (g.columns || []).forEach((col) => {
         const tr = document.createElement("tr");
         const val = displayCell(col);
-        const numClass = clsNum(col.value);
+        const numClass = clsFromDisplay(val, col.value);
         tr.innerHTML = `
           <td class="col-key">${col.label}<div style="font-size:10px;color:#999">${col.key}</div></td>
           <td class="col-val ${numClass}">${val}</td>
@@ -265,24 +299,26 @@ function renderOi(data) {
   });
 }
 
+// Prefer *_display columns (price + chg%) when present
 const HIST_COLS = [
   ["date", "Date"],
   ["day", "Day"],
-  ["nifty", "Nifty"],
-  ["banknifty", "BankNifty"],
-  ["vix", "VIX"],
-  ["gift", "GIFT"],
+  ["nifty_display", "Nifty", "nifty"],
+  ["banknifty_display", "BankNifty", "banknifty"],
+  ["sensex_display", "Sensex", "sensex"],
+  ["vix_display", "VIX", "vix"],
+  ["gift_display", "GIFT", "gift"],
   ["gap_pct", "Gap%"],
   ["gap_category", "GapCat"],
-  ["dow", "Dow"],
-  ["spx", "S&P"],
-  ["nasdaq", "Nasdaq"],
-  ["nikkei", "Nikkei"],
-  ["hsi", "HSI"],
-  ["ftse", "FTSE"],
-  ["dax", "DAX"],
-  ["cac", "CAC"],
-  ["stoxx50", "STOXX50"],
+  ["dow_display", "Dow", "dow"],
+  ["spx_display", "S&P", "spx"],
+  ["nasdaq_display", "Nasdaq", "nasdaq"],
+  ["nikkei_display", "Nikkei", "nikkei"],
+  ["hsi_display", "HSI", "hsi"],
+  ["ftse_display", "FTSE", "ftse"],
+  ["dax_display", "DAX", "dax"],
+  ["cac_display", "CAC", "cac"],
+  ["stoxx50_display", "STOXX50", "stoxx50"],
   ["fii_cash_net", "FII Cash"],
   ["dii_cash_net", "DII Cash"],
   ["fii_idx_fut_long_display", "FII Long (n/%)"],
@@ -301,12 +337,16 @@ function renderHistory(payload) {
   tbody.innerHTML = "";
   (payload.daily || []).forEach((r) => {
     const tr = document.createElement("tr");
-    tr.innerHTML = HIST_COLS.map(([k]) => {
+    tr.innerHTML = HIST_COLS.map((col) => {
+      const k = col[0];
+      const fallback = col[2];
       let v = r[k];
-      if (k === "gap_pct" && typeof v === "number") v = fmt(v, { pct: true });
+      if ((v === null || v === undefined || v === "") && fallback) v = r[fallback];
+      if (k === "gap_pct" && typeof v === "number")
+        v = `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
       else if (typeof v === "number") v = fmt(v);
       else if (v === null || v === undefined || v === "") v = "—";
-      const cls = typeof r[k] === "number" ? clsNum(r[k]) : "";
+      const cls = clsFromDisplay(String(v), typeof r[k] === "number" ? r[k] : r[fallback]);
       return `<td class="${cls}">${v}</td>`;
     }).join("");
     tbody.appendChild(tr);

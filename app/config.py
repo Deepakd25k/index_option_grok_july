@@ -33,6 +33,7 @@ GAP_MEDIUM_PCT = float(os.getenv("GAP_MEDIUM_PCT", "0.70"))
 INSTRUMENTS = {
     "nifty": "NSE_INDEX|Nifty 50",
     "banknifty": "NSE_INDEX|Nifty Bank",
+    "sensex": "BSE_INDEX|SENSEX",
     "vix": "NSE_INDEX|India VIX",
     "gift": "GLOBAL_INDEX|SGX NIFTY",  # GIFT Nifty — auto, no paste
     "dow": "GLOBAL_INDEX|^DJI",
@@ -46,6 +47,7 @@ INSTRUMENTS = {
 YAHOO = {
     "nifty": "^NSEI",
     "banknifty": "^NSEBANK",
+    "sensex": "^BSESN",
     "vix": "^INDIAVIX",
     "dow": "^DJI",
     "spx": "^GSPC",
@@ -68,6 +70,7 @@ DAILY_COLUMNS = [
     "holiday",
     "nifty",
     "banknifty",
+    "sensex",
     "vix",
     "gift",
     "gap_pts",

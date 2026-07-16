@@ -22,6 +22,7 @@ Kab dekhna hai, kya signal milta hai, kaise use karein.
 |--------|--------------|------------|
 | **Nifty 50 Close** | Gap base + trend reference. Expected gap = GIFT − Nifty close | Pre-market pehle number |
 | **BankNifty Close** | Banks heavy din / which index trade. FII flow often bank-linked | Pre-market + open |
+| **Sensex (BSE)** | BSE 30 broad market. Nifty se confirm: dono same direction → cleaner bias; diverge → caution | Pre-market + open |
 | **India VIX** | **Low VIX** → range / mean-reversion friendly. **High VIX** → wide ranges, bigger SL, premium rich options | Pre-market; event weeks (Budget, RBI, US CPI) pe critical |
 
 **Rule of thumb**
