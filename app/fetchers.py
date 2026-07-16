@@ -14,7 +14,10 @@ UA = {"User-Agent": "PremarketDashboard/1.0", "Accept": "application/json"}
 
 
 def format_price_chg(price: float | None, chg_pct: float | None, digits: int = 2) -> str | None:
-    """24078.50 (+0.11%) style — actual day change % in brackets."""
+    """24078.50 (+0.11%) style — actual day change % in brackets.
+
+    Never invent a percent; if unknown, show price only.
+    """
     if price is None:
         return None
     p = f"{price:,.{digits}f}"
@@ -36,12 +39,20 @@ def _chg_abs(price: float | None, prev: float | None) -> float | None:
     return round(price - prev, 4)
 
 
+def _nearly_eq(a: float, b: float) -> bool:
+    return abs(a - b) <= max(0.05, abs(b) * 1e-6)
+
+
 # ── Yahoo (always free, no key) ──────────────────────────────
 def yahoo_quote(symbol: str) -> dict[str, float | None] | None:
-    """Return {price, prev, chg, chg_pct} for a Yahoo symbol."""
+    """Return {price, prev, chg, chg_pct, display}.
+
+    Day % is always vs the **previous daily session close** from the OHLC
+    series. This avoids chartPreviousClose bugs that equal live price → (0.00%).
+    """
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/"
-        f"{quote(symbol, safe='')}?interval=1d&range=10d"
+        f"{quote(symbol, safe='')}?interval=1d&range=1mo"
     )
     try:
         r = requests.get(url, headers=UA, timeout=15)
@@ -53,42 +64,72 @@ def yahoo_quote(symbol: str) -> dict[str, float | None] | None:
         meta = result[0].get("meta") or {}
         closes = ((result[0].get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
 
-        # last two non-null closes
-        non_null = [float(c) for c in closes if c is not None]
-        last = non_null[-1] if non_null else None
-        prev_close = non_null[-2] if len(non_null) >= 2 else None
+        sessions = [float(c) for c in closes if c is not None]
+        if not sessions:
+            return None
 
-        # Prefer meta when available (intraday accurate)
-        price = meta.get("regularMarketPrice")
-        if price is not None:
-            price = float(price)
-        else:
-            price = last
+        last_close = sessions[-1]
+        prev_close = sessions[-2] if len(sessions) >= 2 else None
 
-        chart_prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-        if chart_prev is not None:
-            prev = float(chart_prev)
-        else:
-            prev = prev_close
+        rmp = meta.get("regularMarketPrice")
+        live = float(rmp) if rmp is not None else None
+        price = live if live is not None else last_close
 
-        # If price is last close and prev is chartPreviousClose, good for closed session.
-        # If only one close, try previousClose from meta only.
-        chg_pct = _chg_pct(price, prev)
-        chg = _chg_abs(price, prev)
+        # ── Resolve previous session close ────────────────────
+        # Primary: second-last daily candle (true prior session)
+        ref = prev_close
 
-        # meta sometimes has regularMarketChangePercent already (fraction or %)
-        meta_chg = meta.get("regularMarketChangePercent")
-        if meta_chg is not None and chg_pct is None:
-            try:
-                mc = float(meta_chg)
-                # Yahoo chart meta often stores as percent points already in some feeds
-                chg_pct = round(mc if abs(mc) < 50 else mc, 2)
-            except (TypeError, ValueError):
-                pass
+        meta_prev_raw = meta.get("previousClose") or meta.get("chartPreviousClose")
+        meta_prev = float(meta_prev_raw) if meta_prev_raw is not None else None
+
+        if live is not None and prev_close is not None:
+            if _nearly_eq(live, last_close):
+                # Settled on last bar (market closed / last print = close)
+                price = last_close
+                ref = prev_close
+            else:
+                # Live market: last bar is usually *today's* developing candle
+                # → prior session = prev_close.
+                # Exception: pre-open / last bar still yesterday → prior = last_close
+                if meta_prev is not None and _nearly_eq(last_close, meta_prev):
+                    ref = last_close
+                else:
+                    ref = prev_close
+        elif prev_close is not None:
+            price = last_close
+            ref = prev_close
+
+        # Safety: if ref collapsed to same as price but candles differ, use candle day-move
+        if (
+            ref is not None
+            and prev_close is not None
+            and _nearly_eq(price, ref)
+            and not _nearly_eq(last_close, prev_close)
+        ):
+            price = last_close
+            ref = prev_close
+
+        # Last resort: meta previousClose if still no ref
+        if ref is None and meta_prev is not None and not _nearly_eq(price, meta_prev):
+            ref = meta_prev
+
+        chg_pct = _chg_pct(price, ref)
+        chg = _chg_abs(price, ref)
+
+        # If still zero but last two candles differ, force candle-based day change
+        if (
+            chg_pct == 0.0
+            and prev_close is not None
+            and not _nearly_eq(last_close, prev_close)
+        ):
+            price = last_close
+            ref = prev_close
+            chg_pct = _chg_pct(price, ref)
+            chg = _chg_abs(price, ref)
 
         return {
             "price": price,
-            "prev": prev,
+            "prev": ref,
             "chg": chg,
             "chg_pct": chg_pct,
             "display": format_price_chg(price, chg_pct),
@@ -99,7 +140,7 @@ def yahoo_quote(symbol: str) -> dict[str, float | None] | None:
 
 
 def fetch_yahoo_all() -> dict[str, Any]:
-    """Map name → quote dict (price/prev/chg_pct/display)."""
+    """Map name → quote fields (price / prev / chg_pct / display)."""
     out: dict[str, Any] = {}
     for k, sym in YAHOO.items():
         q = yahoo_quote(sym)
@@ -160,10 +201,7 @@ def extract_ltp(q: dict | None) -> float | None:
         ("ltp",),
         ("ohlc", "close"),
         ("close",),
-        ("net_change",),  # skip
     ):
-        if path[0] == "net_change":
-            continue
         cur: Any = q
         ok = True
         for p in path:
@@ -183,23 +221,22 @@ def extract_ltp(q: dict | None) -> float | None:
 def extract_prev_close(q: dict | None) -> float | None:
     if not q:
         return None
-    for key in ("close_price", "previous_close", "prev_close", "cp"):
+    # Prefer explicit previous close fields — NOT ohlc.close (that's often today)
+    for key in ("previous_close", "prev_close", "close_price", "cp"):
         if q.get(key) is not None:
             try:
-                return float(q[key])
+                val = float(q[key])
+                ltp = extract_ltp(q)
+                # Reject if identical to LTP (causes 0.00%)
+                if ltp is not None and _nearly_eq(val, ltp):
+                    continue
+                return val
             except (TypeError, ValueError):
                 pass
-    ohlc = q.get("ohlc") or {}
-    if ohlc.get("close") is not None:
-        try:
-            return float(ohlc["close"])
-        except (TypeError, ValueError):
-            pass
     return None
 
 
 def extract_net_change_pct(q: dict | None) -> float | None:
-    """Upstox often exposes net_change / percentage fields."""
     if not q:
         return None
     for key in ("percentage_change", "pChange", "net_change_percentage", "change_percent"):
@@ -208,7 +245,6 @@ def extract_net_change_pct(q: dict | None) -> float | None:
                 return round(float(q[key]), 2)
             except (TypeError, ValueError):
                 pass
-    # compute from last + prev
     ltp = extract_ltp(q)
     prev = extract_prev_close(q)
     return _chg_pct(ltp, prev)
@@ -222,18 +258,23 @@ def fetch_upstox_all() -> dict[str, Any]:
         q = raw.get(ikey) or raw.get(ikey.replace("|", ":"))
         ltp = extract_ltp(q)
         prev = extract_prev_close(q)
-        # Prefer live LTP when available (esp. GIFT)
         price = ltp or prev
         chg_pct = extract_net_change_pct(q)
         if chg_pct is None:
             chg_pct = _chg_pct(price, prev)
-        chg = _chg_abs(price, prev)
+        # If Upstox gave 0% because prev==ltp, leave None so Yahoo can fill
+        if chg_pct == 0.0 and prev is not None and price is not None and _nearly_eq(price, prev):
+            chg_pct = None
+            prev = None
+        chg = _chg_abs(price, prev) if prev is not None else None
         out[name] = price
         out[f"{name}_ltp"] = ltp
         out[f"{name}_prev"] = prev
         out[f"{name}_chg"] = chg
         out[f"{name}_chg_pct"] = chg_pct
-        out[f"{name}_display"] = format_price_chg(price, chg_pct)
+        out[f"{name}_display"] = format_price_chg(price, chg_pct) if chg_pct is not None else (
+            f"{price:,.2f}" if price is not None else None
+        )
     return out
 
 

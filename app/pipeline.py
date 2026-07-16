@@ -98,23 +98,40 @@ def run_refresh() -> dict[str, Any]:
         return None
 
     def pick_chg_pct(key: str) -> float | None:
-        for src in (upstox, yahoo):
+        """Prefer a non-null, non-bogus day change. Yahoo candle math is reliable."""
+        candidates: list[float] = []
+        for src in (yahoo, upstox):  # Yahoo first for % accuracy
             v = src.get(f"{key}_chg_pct")
-            if v is not None:
-                try:
-                    return float(v)
-                except (TypeError, ValueError):
-                    pass
-        return None
+            if v is None:
+                continue
+            try:
+                candidates.append(float(v))
+            except (TypeError, ValueError):
+                pass
+        if not candidates:
+            return None
+        # Prefer first non-zero if any non-zero exists (avoid 0.00% from bad prev)
+        for c in candidates:
+            if abs(c) > 1e-9:
+                return c
+        return candidates[0]
 
     def pick_display(key: str) -> str | None:
-        """Prefer source display with (chg%); else build from price + chg_pct."""
-        for src in (upstox, yahoo):
+        """Build display from best price + best day % (never stick with fake 0.00%)."""
+        price = pick(key)
+        chg = pick_chg_pct(key)
+        built = format_price_chg(price, chg)
+        if built:
+            return built
+        for src in (yahoo, upstox):
+            d = src.get(f"{key}_display")
+            if d and "(0.00%)" not in str(d):
+                return str(d)
+        for src in (yahoo, upstox):
             d = src.get(f"{key}_display")
             if d:
                 return str(d)
-        price = pick(key)
-        return format_price_chg(price, pick_chg_pct(key))
+        return None
 
     def px(key: str) -> tuple[float | None, float | None, str | None]:
         return pick(key), pick_chg_pct(key), pick_display(key)
