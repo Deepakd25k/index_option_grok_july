@@ -274,6 +274,126 @@ function renderStructure(data) {
     /Option structure/i.test(s)
   );
   renderEdgeBlocksInto("structureBlocks", blocks);
+
+  // ATM time-window tables (5/15/30m + day) — Upstox candles
+  let host = el("structureAtm");
+  if (!host) {
+    const panel = el("panel-structure");
+    if (panel) {
+      host = document.createElement("div");
+      host.id = "structureAtm";
+      panel.appendChild(host);
+    }
+  }
+  if (!host) return;
+  host.innerHTML = "";
+  const pe = (data && data.pro_edge) || {};
+  const struct = (pe.blocks || []).find((b) =>
+    /Option structure/i.test(String(b.section || ""))
+  );
+  const unders = (struct && struct.underlyings) || pe.underlyings || [];
+  // underlyings may live on structure block
+  const list =
+    unders.length
+      ? unders
+      : (pe.blocks || [])
+          .filter((b) => b.underlyings)
+          .flatMap((b) => b.underlyings || []);
+
+  if (!list.length) {
+    host.innerHTML =
+      '<div class="edge-empty">ATM 5/15/30m table after Upstox chain loads (token + Refresh).</div>';
+    return;
+  }
+
+  list.forEach((u) => {
+    const wrap = document.createElement("div");
+    wrap.className = "sheet-wrap";
+    wrap.style.marginTop = "14px";
+    const atm = u.atm_strike != null ? Number(u.atm_strike).toLocaleString("en-IN") : "—";
+    const pcr =
+      u.atm_pcr != null
+        ? `ATM PCR ${u.atm_pcr}`
+        : u.pcr_now != null
+          ? `Chain PCR ${u.pcr_now}`
+          : "";
+    wrap.innerHTML = `
+      <div class="sheet-title">${u.label || ""} · ATM ${atm} · exp ${u.expiry || "—"} · ${pcr}
+        <div style="font-weight:400;font-size:11px;color:#5f6368;margin-top:4px">
+          OI & premium change vs 5m / 15m / 30m ago and vs day open (~9:15) — Upstox 1-min candles
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="sheet compact">
+          <thead>
+            <tr>
+              <th>Side</th>
+              <th>OI now</th>
+              <th>Prem now</th>
+              <th>OI Δ 5m</th>
+              <th>OI Δ 15m</th>
+              <th>OI Δ 30m</th>
+              <th>OI Δ day</th>
+              <th>Prem Δ 5m</th>
+              <th>Prem Δ 15m</th>
+              <th>Prem Δ 30m</th>
+              <th>Prem Δ day</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>`;
+    const tbody = wrap.querySelector("tbody");
+    (u.rows || []).forEach((r) => {
+      const tr = document.createElement("tr");
+      const cells = [
+        r.side,
+        r.oi_now != null ? Number(r.oi_now).toLocaleString("en-IN") : "—",
+        r.prem_now != null ? Number(r.prem_now).toFixed(2) : "—",
+        r.oi_5m,
+        r.oi_15m,
+        r.oi_30m,
+        r.oi_day,
+        r.prem_5m,
+        r.prem_15m,
+        r.prem_30m,
+        r.prem_day,
+      ];
+      tr.innerHTML = cells
+        .map((c, i) => {
+          const cls = i >= 3 ? clsFromDisplay(String(c), null) : "";
+          return `<td class="${cls}">${c ?? "—"}</td>`;
+        })
+        .join("");
+      tbody.appendChild(tr);
+    });
+    // spot price windows row
+    const sw = u.spot_windows || {};
+    if (sw.prem_chg) {
+      const tr = document.createElement("tr");
+      tr.style.background = "#f8fafc";
+      tr.innerHTML = `
+        <td><strong>Spot price</strong></td>
+        <td colspan="2">${u.spot != null ? Number(u.spot).toFixed(2) : "—"}</td>
+        <td class="${clsFromDisplay(String(_fmtSpot(sw, "5m")), null)}">${_fmtSpot(sw, "5m")}</td>
+        <td class="${clsFromDisplay(String(_fmtSpot(sw, "15m")), null)}">${_fmtSpot(sw, "15m")}</td>
+        <td class="${clsFromDisplay(String(_fmtSpot(sw, "30m")), null)}">${_fmtSpot(sw, "30m")}</td>
+        <td class="${clsFromDisplay(String(_fmtSpot(sw, "day")), null)}">${_fmtSpot(sw, "day")}</td>
+        <td colspan="4" style="color:#5f6368;font-size:11px">Index price Δ (not option premium)</td>`;
+      tbody.appendChild(tr);
+    }
+    host.appendChild(wrap);
+  });
+}
+
+function _fmtSpot(sw, key) {
+  const n = (sw.prem_chg || {})[key];
+  const p = (sw.prem_chg_pct || {})[key];
+  if (n == null) return "—";
+  const sign = n > 0 ? "+" : "";
+  const s = `${sign}${Number(n).toFixed(2)}`;
+  if (p != null) return `${s} (${p > 0 ? "+" : ""}${p}%)`;
+  return s;
 }
 
 function renderSnapshot(data) {

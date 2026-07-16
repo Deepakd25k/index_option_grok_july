@@ -219,22 +219,42 @@ def build_fii_only(series: list[dict] | None = None) -> dict[str, Any]:
     }
 
 
-# ── Upstox option structure ──────────────────────────────────
+def _fmt_chg(n: float | None, pct: float | None = None) -> str:
+    if n is None:
+        return "—"
+    sign = "+" if n > 0 else ""
+    s = f"{sign}{n:,.0f}" if abs(n) >= 10 else f"{sign}{n:.2f}"
+    if pct is not None:
+        ps = "+" if pct > 0 else ""
+        s += f" ({ps}{pct:.2f}%)"
+    return s
+
+
+# ── Upstox option structure + ATM time windows ───────────────
 def build_upstox_option_structure() -> dict[str, Any]:
+    """
+    Structure tab payload:
+      - cards: max pain, walls, PCR summary
+      - underlyings[]: per index ATM windows (5/15/30m + day) for OI & premium
+    All from Upstox: /option/chain, /market/max-pain, v3 1m candles (OI field).
+    """
     cards: list[dict] = []
+    underlyings: list[dict] = []
+
     if not ux.enabled():
         return {
             "section": "Option structure (Upstox)",
             "cards": [
                 _card(
                     "oc_gate",
-                    "Max pain / walls / PCR",
+                    "Structure locked",
                     "Set UPSTOX_ACCESS_TOKEN",
-                    "Live chain + official max-pain from Upstox API.",
-                    "Vercel/local env me token lagao — phir Nifty & BankNifty walls unlock.",
+                    "Chain + ATM OI/premium windows need Upstox market data.",
+                    "Vercel/local .env me token → restart → Structure tab Refresh.",
                 )
             ],
-            "note": "API: /v2/option/chain · /v2/market/max-pain · expiry=current_week",
+            "underlyings": [],
+            "note": "Token required · APIs: option/chain · max-pain · v3 intraday candles",
         }
 
     for label, key in (
@@ -244,42 +264,63 @@ def build_upstox_option_structure() -> dict[str, Any]:
         exp = "current_week"
         chain = ux.option_chain(key, exp)
         spot, rows, exp_resolved = ux.parse_chain_rows(chain)
+
+        # Spot day windows from index 1m candles
+        spot_win = ux.oi_premium_windows(key) if spot or key else {}
+
         mp_data = ux.max_pain_api(key, exp)
         mp = None
-        spot_close = spot
         if isinstance(mp_data, dict):
             mp = mp_data.get("max_pain")
-            if mp_data.get("spot_closing_price") is not None:
+            exp_resolved = exp_resolved or str(mp_data.get("expiry_date") or "")[:10]
+            if mp_data.get("spot_closing_price") is not None and spot is None:
                 try:
-                    spot_close = float(mp_data["spot_closing_price"])
+                    spot = float(mp_data["spot_closing_price"])
                 except (TypeError, ValueError):
                     pass
-            exp_resolved = exp_resolved or str(mp_data.get("expiry_date") or "")[:10]
         if mp is None and rows:
             mp = ux.compute_max_pain_from_rows(rows)
 
-        walls = ux.walls_from_rows(rows, spot or spot_close)
+        walls = ux.walls_from_rows(rows, spot)
+        atm = ux.atm_row(rows, spot)
 
-        if not rows and mp is None:
+        if not rows:
             cards.append(
                 _card(
-                    f"{label}_oc",
+                    f"{label}_empty",
                     f"{label} chain",
-                    "No data",
-                    "Upstox chain empty — check token / market hours / expiry.",
-                    "Token must have market data scope.",
+                    "Empty / API fail",
+                    "Upstox option chain returned no strikes.",
+                    "Check token scope, expiry (current_week), market day.",
                 )
             )
             continue
 
-        sp = spot or spot_close
+        # Day OI change for full chain (prev_oi from chain)
+        tot_ce = sum(r["ce_oi"] for r in rows)
+        tot_pe = sum(r["pe_oi"] for r in rows)
+        prev_ce = sum(r.get("ce_prev_oi") or 0 for r in rows)
+        prev_pe = sum(r.get("pe_prev_oi") or 0 for r in rows)
+        pcr_now = (tot_pe / tot_ce) if tot_ce else None
+        pcr_prev = (prev_pe / prev_ce) if prev_ce else None
+        pcr_day_chg = (
+            round(pcr_now - pcr_prev, 3)
+            if pcr_now is not None and pcr_prev is not None
+            else None
+        )
+
+        sp = spot
         cards.append(
             _card(
                 f"{label}_spot",
-                f"{label} spot (chain)",
-                f"{sp:,.2f}" if sp else "—",
-                "Underlying spot from Upstox option chain.",
-                "Distance math for walls & max pain uses this level.",
+                f"{label} spot",
+                (
+                    f"{sp:,.2f} · day {_fmt_chg(spot_win.get('prem_chg', {}).get('day'), spot_win.get('prem_chg_pct', {}).get('day'))}"
+                    if sp
+                    else "—"
+                ),
+                "Underlying spot from Upstox chain + day move from 1m candles since ~9:15.",
+                "Price context for ATM & walls.",
             )
         )
         dist_mp = (
@@ -292,22 +333,33 @@ def build_upstox_option_structure() -> dict[str, Any]:
                 f"{label}_maxpain",
                 f"{label} max pain",
                 (
-                    f"{float(mp):,.0f} ({dist_mp:+.2f}% vs spot) · exp {exp_resolved or exp}"
+                    f"{float(mp):,.0f} ({dist_mp:+.2f}% vs spot) · {exp_resolved or exp}"
                     if mp is not None and dist_mp is not None
                     else (_fmt_int(mp) if mp is not None else "—")
                 ),
-                "Strike where option writers lose least at expiry (Upstox max-pain API / chain calc).",
-                "Expiry week me spot often drifts toward max pain — not a daily magnet.",
-                "Near expiry mean-revert risk" if dist_mp is not None and abs(dist_mp) > 0.8 else "",
+                "Upstox /market/max-pain (fallback: chain calc).",
+                "Expiry gravity — stronger near expiry week.",
+            )
+        )
+        pcr_disp = f"{pcr_now:.3f}" if pcr_now is not None else "—"
+        if pcr_day_chg is not None:
+            pcr_disp += f" · day Δ {_fmt_signed(pcr_day_chg, 3)}"
+        cards.append(
+            _card(
+                f"{label}_pcr",
+                f"{label} PCR (OI) + day Δ",
+                pcr_disp,
+                "Total put OI ÷ call OI. Day Δ uses chain prev_oi (since yesterday close).",
+                "PCR ↑ = more put heavy. Intraday PCR path uses ATM table below when candles available.",
             )
         )
         cards.append(
             _card(
-                f"{label}_pcr",
-                f"{label} chain PCR (OI)",
-                f"{walls.get('pcr')}" if walls.get("pcr") is not None else "—",
-                "Total put OI ÷ total call OI on near expiry chain.",
-                "High PCR = put-heavy support bias; low PCR = call-heavy overhead.",
+                f"{label}_chain_oi_day",
+                f"{label} total OI day Δ",
+                f"CE {_fmt_chg(tot_ce - prev_ce)} · PE {_fmt_chg(tot_pe - prev_pe)} · Net put-call Δ {_fmt_chg((tot_pe - tot_ce) - (prev_pe - prev_ce))}",
+                "Full-chain OI change since previous session (prev_oi on each strike).",
+                "Full-day institutional positioning shift in options book.",
             )
         )
         if walls.get("ce_wall_strike") is not None:
@@ -316,8 +368,8 @@ def build_upstox_option_structure() -> dict[str, Any]:
                     f"{label}_ce_wall",
                     f"{label} Call wall",
                     f"{walls['ce_wall_strike']:,.0f} · OI {_fmt_int(walls.get('ce_wall_oi'))} · {walls.get('dist_ce_pct')}% away",
-                    "Highest call OI strike — resistance / pin zone.",
-                    "Rejection at wall = range high; volume break = cover fuel.",
+                    "Highest call OI strike.",
+                    "Resistance / pin zone.",
                 )
             )
         if walls.get("pe_wall_strike") is not None:
@@ -326,15 +378,82 @@ def build_upstox_option_structure() -> dict[str, Any]:
                     f"{label}_pe_wall",
                     f"{label} Put wall",
                     f"{walls['pe_wall_strike']:,.0f} · OI {_fmt_int(walls.get('pe_wall_oi'))} · {walls.get('dist_pe_pct')}% away",
-                    "Highest put OI strike — support / pin zone.",
-                    "Hold = dip-buy zone; clean break = stop cascade risk.",
+                    "Highest put OI strike.",
+                    "Support / pin zone.",
                 )
             )
+
+        # ATM CE/PE windows via 1-min candles (OI + premium)
+        atm_block: dict[str, Any] = {
+            "label": label,
+            "spot": sp,
+            "expiry": exp_resolved or exp,
+            "atm_strike": atm["strike"] if atm else None,
+            "pcr_now": pcr_now,
+            "pcr_day_chg": pcr_day_chg,
+            "spot_windows": spot_win,
+            "ce": None,
+            "pe": None,
+            "rows": [],  # table rows for UI
+        }
+        if atm:
+            ce_key, pe_key = atm.get("ce_key"), atm.get("pe_key")
+            ce_w = ux.oi_premium_windows(ce_key) if ce_key else {}
+            pe_w = ux.oi_premium_windows(pe_key) if pe_key else {}
+            atm_block["ce"] = {
+                "key": ce_key,
+                "ltp": atm.get("ce_ltp"),
+                "oi": atm.get("ce_oi"),
+                "windows": ce_w,
+            }
+            atm_block["pe"] = {
+                "key": pe_key,
+                "ltp": atm.get("pe_ltp"),
+                "oi": atm.get("pe_oi"),
+                "windows": pe_w,
+            }
+
+            def row(side: str, w: dict, live_oi: Any, live_ltp: Any) -> dict:
+                now = (w or {}).get("now") or {}
+                return {
+                    "side": side,
+                    "strike": atm["strike"],
+                    "oi_now": now.get("oi") if now.get("oi") is not None else live_oi,
+                    "prem_now": now.get("close") if now.get("close") is not None else live_ltp,
+                    "oi_5m": _fmt_chg((w or {}).get("oi_chg", {}).get("5m"), (w or {}).get("oi_chg_pct", {}).get("5m")),
+                    "oi_15m": _fmt_chg((w or {}).get("oi_chg", {}).get("15m"), (w or {}).get("oi_chg_pct", {}).get("15m")),
+                    "oi_30m": _fmt_chg((w or {}).get("oi_chg", {}).get("30m"), (w or {}).get("oi_chg_pct", {}).get("30m")),
+                    "oi_day": _fmt_chg((w or {}).get("oi_chg", {}).get("day"), (w or {}).get("oi_chg_pct", {}).get("day")),
+                    "prem_5m": _fmt_chg((w or {}).get("prem_chg", {}).get("5m"), (w or {}).get("prem_chg_pct", {}).get("5m")),
+                    "prem_15m": _fmt_chg((w or {}).get("prem_chg", {}).get("15m"), (w or {}).get("prem_chg_pct", {}).get("15m")),
+                    "prem_30m": _fmt_chg((w or {}).get("prem_chg", {}).get("30m"), (w or {}).get("prem_chg_pct", {}).get("30m")),
+                    "prem_day": _fmt_chg((w or {}).get("prem_chg", {}).get("day"), (w or {}).get("prem_chg_pct", {}).get("day")),
+                }
+
+            atm_block["rows"] = [
+                row("ATM CE", ce_w, atm.get("ce_oi"), atm.get("ce_ltp")),
+                row("ATM PE", pe_w, atm.get("pe_oi"), atm.get("pe_ltp")),
+            ]
+            # Combined OI PCR proxy at ATM: pe_oi/ce_oi now
+            ce_oi_n = atm_block["rows"][0].get("oi_now")
+            pe_oi_n = atm_block["rows"][1].get("oi_now")
+            try:
+                if ce_oi_n and pe_oi_n and float(ce_oi_n):
+                    atm_block["atm_pcr"] = round(float(pe_oi_n) / float(ce_oi_n), 3)
+            except (TypeError, ValueError):
+                pass
+
+        underlyings.append(atm_block)
 
     return {
         "section": "Option structure (Upstox)",
         "cards": cards,
-        "note": "Upstox: option/chain + market/max-pain · expiry current_week",
+        "underlyings": underlyings,
+        "note": (
+            "ATM OI & premium Δ from Upstox v3 1-min candles (field: OI + close). "
+            "Windows: now vs 5m / 15m / 30m ago and vs ~9:15 day open. "
+            "Full-chain day OI uses prev_oi on chain."
+        ),
     }
 
 
@@ -497,15 +616,15 @@ def build_pro_edge(context: dict[str, Any] | None = None) -> dict[str, Any]:
             if c.get("signal"):
                 signals.append(f"{c['title']}: {c['signal']}")
 
-    return {
+    pe = {
         "built_at": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S IST"),
         "headline": "Pro Edge — FII only",
         "blurb": (
-            "Sirf institutional / structure data jo Sheet pe nahi hai: "
-            "FII fut+opt book with Δ, Upstox max pain & OI walls, "
-            "index futures ORB/volume, FII next-day hit-rate. "
-            "Koi Nasdaq/Dow/VIX repeat nahi."
+            "FII book + Upstox structure (ATM OI/premium 5/15/30m/day) + "
+            "futures ORB + FII hit-rate. No tape duplicates."
         ),
         "active_signals": signals[:10],
         "blocks": [fii_block, opt_block, orb_block, score_block],
+        "underlyings": opt_block.get("underlyings") or [],
     }
+    return pe

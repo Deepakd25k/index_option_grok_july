@@ -275,7 +275,7 @@ def option_chain(instrument_key: str, expiry: str | None = None) -> list[dict]:
 
 
 def parse_chain_rows(chain: list[dict]) -> tuple[float | None, list[dict], str | None]:
-    """spot, [{strike, ce_oi, pe_oi, ce_vol, pe_vol, pcr_row}], expiry"""
+    """spot, rows with OI/premium/instrument keys, expiry"""
     spot = None
     expiry = None
     rows: list[dict] = []
@@ -303,10 +303,169 @@ def parse_chain_rows(chain: list[dict]) -> tuple[float | None, list[dict], str |
                 "pe_vol": float(pe_md.get("volume") or 0),
                 "ce_prev_oi": float(ce_md.get("prev_oi") or 0),
                 "pe_prev_oi": float(pe_md.get("prev_oi") or 0),
+                "ce_ltp": _f(ce_md.get("ltp")),
+                "pe_ltp": _f(pe_md.get("ltp")),
+                "ce_key": ce.get("instrument_key"),
+                "pe_key": pe.get("instrument_key"),
                 "row_pcr": item.get("pcr"),
             }
         )
     return spot, rows, expiry
+
+
+def atm_row(rows: list[dict], spot: float | None) -> dict | None:
+    if not rows or spot is None:
+        return None
+    return min(rows, key=lambda r: abs(r["strike"] - spot))
+
+
+def intraday_v3(instrument_key: str, unit: str = "minutes", interval: str = "1") -> list:
+    """
+    GET /v3/historical-candle/intraday/{key}/{unit}/{interval}
+    Candle: [ts, o, h, l, c, volume, oi]
+    """
+    if not enabled() or not instrument_key:
+        return []
+    path = (
+        f"https://api.upstox.com/v3/historical-candle/intraday/"
+        f"{quote(instrument_key, safe='')}/{unit}/{interval}"
+    )
+    body = _get(path, timeout=30)
+    if not body or not isinstance(body, dict):
+        return []
+    return list((body.get("data") or {}).get("candles") or [])
+
+
+def _parse_ts(ts: Any) -> datetime | None:
+    if ts is None:
+        return None
+    try:
+        s = str(ts).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)
+        return dt.astimezone(TZ)
+    except Exception:
+        return None
+
+
+def candle_snapshot(candles: list, minutes_ago: int | None = None, day_open: bool = False) -> dict | None:
+    """
+    Pick a candle for 'now', N minutes ago, or first bar of the day (≈9:15).
+    Candles may be newest-first or oldest-first — we sort ascending by time.
+    Returns {ts, close, oi, volume}.
+    """
+    parsed: list[tuple[datetime, list]] = []
+    for c in candles:
+        if not isinstance(c, (list, tuple)) or len(c) < 5:
+            continue
+        dt = _parse_ts(c[0])
+        if not dt:
+            continue
+        parsed.append((dt, list(c)))
+    if not parsed:
+        return None
+    parsed.sort(key=lambda x: x[0])
+    now = datetime.now(TZ)
+
+    def pack(dt: datetime, c: list) -> dict:
+        oi = float(c[6]) if len(c) > 6 and c[6] is not None else None
+        vol = float(c[5]) if len(c) > 5 and c[5] is not None else None
+        return {
+            "ts": dt.strftime("%H:%M"),
+            "close": float(c[4]),
+            "oi": oi,
+            "volume": vol,
+        }
+
+    if day_open:
+        # first candle at/after 09:15 today
+        today = now.date()
+        for dt, c in parsed:
+            if dt.date() == today and (dt.hour > 9 or (dt.hour == 9 and dt.minute >= 15)):
+                return pack(dt, c)
+        # fallback first of day
+        for dt, c in parsed:
+            if dt.date() == today:
+                return pack(dt, c)
+        return pack(parsed[0][0], parsed[0][1])
+
+    if minutes_ago is None or minutes_ago <= 0:
+        return pack(parsed[-1][0], parsed[-1][1])
+
+    target = now - timedelta(minutes=minutes_ago)
+    # last candle at or before target
+    chosen = parsed[0]
+    for dt, c in parsed:
+        if dt <= target:
+            chosen = (dt, c)
+        else:
+            break
+    return pack(chosen[0], chosen[1])
+
+
+def oi_premium_windows(instrument_key: str) -> dict[str, Any]:
+    """
+    ATM CE/PE style windows from 1-min candles:
+    now, 5m, 15m, 30m, day_open → OI + premium (close).
+    """
+    candles = intraday_v3(instrument_key, "minutes", "1")
+    if not candles:
+        # try 5-min if 1-min empty
+        candles = intraday_v3(instrument_key, "minutes", "5")
+    now = candle_snapshot(candles, 0)
+    w5 = candle_snapshot(candles, 5)
+    w15 = candle_snapshot(candles, 15)
+    w30 = candle_snapshot(candles, 30)
+    wopen = candle_snapshot(candles, day_open=True)
+
+    def delta(cur: dict | None, old: dict | None, field: str) -> float | None:
+        if not cur or not old:
+            return None
+        a, b = cur.get(field), old.get(field)
+        if a is None or b is None:
+            return None
+        return float(a) - float(b)
+
+    def pct(cur: dict | None, old: dict | None, field: str) -> float | None:
+        if not cur or not old:
+            return None
+        a, b = cur.get(field), old.get(field)
+        if a is None or b in (None, 0):
+            return None
+        return round(100.0 * (float(a) - float(b)) / float(b), 2)
+
+    return {
+        "now": now,
+        "m5": w5,
+        "m15": w15,
+        "m30": w30,
+        "day_open": wopen,
+        "oi_chg": {
+            "5m": delta(now, w5, "oi"),
+            "15m": delta(now, w15, "oi"),
+            "30m": delta(now, w30, "oi"),
+            "day": delta(now, wopen, "oi"),
+        },
+        "oi_chg_pct": {
+            "5m": pct(now, w5, "oi"),
+            "15m": pct(now, w15, "oi"),
+            "30m": pct(now, w30, "oi"),
+            "day": pct(now, wopen, "oi"),
+        },
+        "prem_chg": {
+            "5m": delta(now, w5, "close"),
+            "15m": delta(now, w15, "close"),
+            "30m": delta(now, w30, "close"),
+            "day": delta(now, wopen, "close"),
+        },
+        "prem_chg_pct": {
+            "5m": pct(now, w5, "close"),
+            "15m": pct(now, w15, "close"),
+            "30m": pct(now, w30, "close"),
+            "day": pct(now, wopen, "close"),
+        },
+    }
 
 
 def max_pain_api(instrument_key: str, expiry: str = "current_week") -> dict | None:
