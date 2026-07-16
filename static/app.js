@@ -304,66 +304,122 @@ function renderLive(data) {
   renderEdgeBlocksInto("liveOrbBlocks", orb);
 }
 
-/** Classic Call | Strike | Put board — only Live Market */
+/**
+ * Call | Strike | Put board
+ * For each strike CE & PE:
+ *   now OI/prem · value at 5m/15m/30m/open · Δ vs those
+ */
 function renderOiBoard(hostId, data) {
   const host = el(hostId);
   if (!host) return;
+  const boards =
+    (data.oi_board && data.oi_board.boards) ||
+    ((data.pro_edge || {}).oi_board || {}).boards ||
+    [];
   host.innerHTML = "";
-  const boards = ((data.pro_edge || {}).oi_board || {}).boards || [];
   if (!boards.length) {
     host.innerHTML =
-      '<div class="edge-empty">OI chain: set UPSTOX_ACCESS_TOKEN + Refresh. Call left · Strike middle · Put right.</div>';
+      '<div class="edge-empty">OI chain loading… Upstox token + wait ~15s for ATM±3 history.</div>';
     return;
   }
+
+  const tl = (b) => b.time_labels || {};
 
   boards.forEach((b) => {
     const wrap = document.createElement("div");
     wrap.className = "sheet-wrap oi-board";
     wrap.style.marginBottom = "16px";
-
     if (!b.ok) {
       wrap.innerHTML = `<div class="sheet-title">${b.label}</div><div class="edge-empty">${b.error || "No chain"}</div>`;
       host.appendChild(wrap);
       return;
     }
-
     const read = b.read || {};
+    const T = tl(b);
     wrap.innerHTML = `
       <div class="sheet-title">
-        ${b.label} · Spot ${b.spot != null ? Number(b.spot).toFixed(2) : "—"}
-        · exp ${b.expiry || "—"} · PCR ${b.pcr ?? "—"}
+        ${b.label} · Spot <b>${b.spot != null ? Number(b.spot).toFixed(2) : "—"}</b>
+        · ATM <b>${b.atm != null ? Number(b.atm).toLocaleString("en-IN") : "—"}</b>
+        · PCR <b>${b.pcr ?? "—"}</b> · exp ${b.expiry || "—"}
         <div class="oi-legend">
           <span class="lg atm">ATM</span>
-          <span class="lg support">Support (put wall)</span>
-          <span class="lg resist">Resist (call wall)</span>
+          <span class="lg support">Support</span>
+          <span class="lg resist">Resist</span>
           <span class="lg maxpain">Max pain</span>
         </div>
       </div>
       <div class="oi-read">
-        <div><strong>Ab kya:</strong> ${read.what_now || "—"}</div>
-        <div><strong>Aage plan (25–35 pt):</strong> ${read.what_next || "—"}</div>
-        <div class="muted">Day OI Δ — CE ${b.tot_ce_day || "—"} · PE ${b.tot_pe_day || "—"}</div>
+        <div><strong>Ab kya (OI):</strong> ${read.what_now || "—"}</div>
+        <div><strong>Aage (25–35 pt):</strong> ${read.what_next || "—"}</div>
+        <div class="muted">Times — now: ${T.now || "now"} · 5m: ${T.m5 || "—"} · 15m: ${T.m15 || "—"} · 30m: ${T.m30 || "—"} · open: ${T.open || "~9:15"}</div>
       </div>
       <div class="table-scroll">
         <table class="sheet compact oi-chain">
           <thead>
             <tr>
-              <th class="ce">CE OI</th>
-              <th class="ce">CE Δ day</th>
-              <th class="ce">CE LTP</th>
+              <th class="ce" colspan="5">CALL →</th>
               <th class="mid">STRIKE</th>
-              <th class="pe">PE LTP</th>
-              <th class="pe">PE Δ day</th>
-              <th class="pe">PE OI</th>
+              <th class="pe" colspan="5">← PUT</th>
+            </tr>
+            <tr>
+              <th class="ce">OI now</th>
+              <th class="ce">OI@5m</th>
+              <th class="ce">OI@15m</th>
+              <th class="ce">OI@30m</th>
+              <th class="ce">OI@open</th>
+              <th class="mid">price</th>
+              <th class="pe">OI@open</th>
+              <th class="pe">OI@30m</th>
+              <th class="pe">OI@15m</th>
+              <th class="pe">OI@5m</th>
+              <th class="pe">OI now</th>
             </tr>
           </thead>
-          <tbody></tbody>
+          <tbody class="oi-body"></tbody>
+        </table>
+        <table class="sheet compact oi-chain" style="margin-top:8px">
+          <thead>
+            <tr>
+              <th class="ce" colspan="5">CALL prem Δ →</th>
+              <th class="mid">STRIKE</th>
+              <th class="pe" colspan="5">← PUT prem Δ</th>
+            </tr>
+            <tr>
+              <th class="ce">LTP</th>
+              <th class="ce">Δ5m</th>
+              <th class="ce">Δ15m</th>
+              <th class="ce">Δ30m</th>
+              <th class="ce">Δ open</th>
+              <th class="mid"></th>
+              <th class="pe">Δ open</th>
+              <th class="pe">Δ30m</th>
+              <th class="pe">Δ15m</th>
+              <th class="pe">Δ5m</th>
+              <th class="pe">LTP</th>
+            </tr>
+          </thead>
+          <tbody class="prem-body"></tbody>
         </table>
       </div>
-      <p class="note">ATM row pe 5/15/30m OI change tooltips · Green strike = strong support · Red = strong resistance · Purple mark = max pain</p>
+      <p class="note">OI@5m = us waqt kitna OI tha (e.g. 1:25). Δ = abhi − us time (inc green / dec red). Green strike = support · Red = resistance · Yellow = ATM · Purple = max pain.</p>
     `;
-    const tb = wrap.querySelector("tbody");
+    const oiBody = wrap.querySelector(".oi-body");
+    const premBody = wrap.querySelector(".prem-body");
+
+    const oiAt = (side, k) => {
+      const v = side && side[k];
+      if (v == null) return "—";
+      return Number(v).toLocaleString("en-IN");
+    };
+    const oiChg = (side, key) => {
+      const o = side && side[key];
+      if (!o) return "—";
+      return o.disp || "—";
+    };
+
     (b.rows || []).forEach((r) => {
+      const ce = r.ce || {};
+      const pe = r.pe || {};
       const tr = document.createElement("tr");
       if (r.mark_class) tr.className = "row-" + r.mark_class.split(" ")[0];
       const marks = (r.marks || []).join(" · ");
@@ -372,20 +428,54 @@ function renderOiBoard(hostId, data) {
           <span class="stk">${Number(r.strike).toLocaleString("en-IN")}</span>
           ${marks ? `<span class="stk-mark">${marks}</span>` : ""}
         </div>`;
-      const tip =
-        r.ce_oi_5m || r.pe_oi_5m
-          ? `title="ATM windows — CE OI 5m ${r.ce_oi_5m || "—"} · 15m ${r.ce_oi_15m || "—"} · 30m ${r.ce_oi_30m || "—"} | PE OI 5m ${r.pe_oi_5m || "—"} · 15m ${r.pe_oi_15m || "—"} · 30m ${r.pe_oi_30m || "—"}"`
-          : "";
+      // OI row: show absolute at each time + title with Δ
       tr.innerHTML = `
-        <td class="ce col-val ${clsFromDisplay(String(r.ce_oi_day), null)}">${r.ce_oi != null ? Number(r.ce_oi).toLocaleString("en-IN") : "—"}</td>
-        <td class="ce col-val ${clsFromDisplay(String(r.ce_oi_day), null)}">${r.ce_oi_day || "—"}</td>
-        <td class="ce">${r.ce_ltp != null ? Number(r.ce_ltp).toFixed(2) : "—"}</td>
-        <td class="mid" ${tip}>${strikeCell}</td>
-        <td class="pe">${r.pe_ltp != null ? Number(r.pe_ltp).toFixed(2) : "—"}</td>
-        <td class="pe col-val ${clsFromDisplay(String(r.pe_oi_day), null)}">${r.pe_oi_day || "—"}</td>
-        <td class="pe col-val ${clsFromDisplay(String(r.pe_oi_day), null)}">${r.pe_oi != null ? Number(r.pe_oi).toLocaleString("en-IN") : "—"}</td>
+        <td class="ce" title="Δ ${oiChg(ce, "oi_5m")}">${ce.oi_now_disp || oiAt(ce, "oi_now")}</td>
+        <td class="ce" title="Δ now−5m: ${oiChg(ce, "oi_5m")}">${ce.oi_5m?.at_disp || oiAt(ce, "oi_at_5m")}</td>
+        <td class="ce" title="Δ ${oiChg(ce, "oi_15m")}">${ce.oi_15m?.at_disp || oiAt(ce, "oi_at_15m")}</td>
+        <td class="ce" title="Δ ${oiChg(ce, "oi_30m")}">${ce.oi_30m?.at_disp || oiAt(ce, "oi_at_30m")}</td>
+        <td class="ce" title="Δ day ${oiChg(ce, "oi_open")}">${ce.oi_open?.at_disp || oiAt(ce, "oi_at_open")}</td>
+        <td class="mid">${strikeCell}</td>
+        <td class="pe" title="Δ day ${oiChg(pe, "oi_open")}">${pe.oi_open?.at_disp || oiAt(pe, "oi_at_open")}</td>
+        <td class="pe" title="Δ ${oiChg(pe, "oi_30m")}">${pe.oi_30m?.at_disp || oiAt(pe, "oi_at_30m")}</td>
+        <td class="pe" title="Δ ${oiChg(pe, "oi_15m")}">${pe.oi_15m?.at_disp || oiAt(pe, "oi_at_15m")}</td>
+        <td class="pe" title="Δ ${oiChg(pe, "oi_5m")}">${pe.oi_5m?.at_disp || oiAt(pe, "oi_at_5m")}</td>
+        <td class="pe" title="Δ ${oiChg(pe, "oi_5m")}">${pe.oi_now_disp || oiAt(pe, "oi_now")}</td>
       `;
-      tb.appendChild(tr);
+      // color chg columns via data attributes — mark Δ in title; color cells if chg known
+      [
+        [1, ce.oi_5m],
+        [2, ce.oi_15m],
+        [3, ce.oi_30m],
+        [4, ce.oi_open],
+        [6, pe.oi_open],
+        [7, pe.oi_30m],
+        [8, pe.oi_15m],
+        [9, pe.oi_5m],
+      ].forEach(([idx, obj]) => {
+        const td = tr.children[idx];
+        if (td && obj && obj.chg != null) {
+          td.classList.add(obj.chg > 0 ? "num-pos" : obj.chg < 0 ? "num-neg" : "");
+        }
+      });
+      oiBody.appendChild(tr);
+
+      const tr2 = document.createElement("tr");
+      if (r.mark_class) tr2.className = "row-" + r.mark_class.split(" ")[0];
+      tr2.innerHTML = `
+        <td class="ce">${ce.prem_now_disp || "—"}</td>
+        <td class="ce ${clsFromDisplay(ce.prem_5m?.disp, ce.prem_5m?.chg)}">${ce.prem_5m?.disp || "—"}</td>
+        <td class="ce ${clsFromDisplay(ce.prem_15m?.disp, ce.prem_15m?.chg)}">${ce.prem_15m?.disp || "—"}</td>
+        <td class="ce ${clsFromDisplay(ce.prem_30m?.disp, ce.prem_30m?.chg)}">${ce.prem_30m?.disp || "—"}</td>
+        <td class="ce ${clsFromDisplay(ce.prem_open?.disp, ce.prem_open?.chg)}">${ce.prem_open?.disp || "—"}</td>
+        <td class="mid"><span class="stk-mark" style="opacity:.7">${(r.marks || []).join(" ") || ""}</span></td>
+        <td class="pe ${clsFromDisplay(pe.prem_open?.disp, pe.prem_open?.chg)}">${pe.prem_open?.disp || "—"}</td>
+        <td class="pe ${clsFromDisplay(pe.prem_30m?.disp, pe.prem_30m?.chg)}">${pe.prem_30m?.disp || "—"}</td>
+        <td class="pe ${clsFromDisplay(pe.prem_15m?.disp, pe.prem_15m?.chg)}">${pe.prem_15m?.disp || "—"}</td>
+        <td class="pe ${clsFromDisplay(pe.prem_5m?.disp, pe.prem_5m?.chg)}">${pe.prem_5m?.disp || "—"}</td>
+        <td class="pe">${pe.prem_now_disp || "—"}</td>
+      `;
+      premBody.appendChild(tr2);
     });
     host.appendChild(wrap);
   });
@@ -923,7 +1013,50 @@ async function pollLiveIndices() {
 }
 
 // Continuous live: every 10s (Upstox quotes only — cheap)
-// Continuous live: every 3s — Upstox quotes (no manual refresh)
+// Prices every 3s · OI board (ATM±3 history) every 12s
 const LIVE_MS = 3 * 1000;
+const CHAIN_MS = 12 * 1000;
 setInterval(pollLiveIndices, LIVE_MS);
-setTimeout(pollLiveIndices, 500);
+setTimeout(pollLiveIndices, 400);
+
+async function pollLiveChain() {
+  if (document.hidden) return;
+  try {
+    const r = await fetch("/api/live-chain", { cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok || !j.oi_board) return;
+    const snap = window.__lastSnap || {};
+    snap.oi_board = j.oi_board;
+    if (!snap.pro_edge) snap.pro_edge = {};
+    snap.pro_edge.oi_board = j.oi_board;
+    window.__lastSnap = snap;
+    if (el("panel-live")?.classList.contains("active")) {
+      renderOiBoard("liveAtmHost", snap);
+      // refresh playbook from board
+      const boards = j.oi_board.boards || [];
+      const nb = boards.find((b) => b.label === "Nifty" && b.ok);
+      if (nb && nb.read) {
+        const pb = el("livePlaybook");
+        if (pb) {
+          const bias = nb.read.bias || "RANGE";
+          pb.className =
+            "playbook " +
+            (bias.includes("BOUNCE") || bias.includes("SUPPORT")
+              ? "bull"
+              : bias.includes("REJECT") || bias.includes("CAP")
+                ? "bear"
+                : "neutral");
+          setText("livePlayHead", nb.read.headline || "OI");
+          setText(
+            "livePlayBody",
+            (nb.read.what_next || "") + " · " + (nb.read.what_now || "")
+          );
+        }
+      }
+    }
+  } catch (e) {
+    /* silent */
+  }
+}
+setInterval(pollLiveChain, CHAIN_MS);
+setTimeout(pollLiveChain, 2000);

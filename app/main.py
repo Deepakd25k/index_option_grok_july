@@ -126,6 +126,29 @@ def upstox_status():
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/api/live-chain")
+@app.post("/api/live-chain")
+def live_chain():
+    """ATM±3 Call|Strike|Put board with 5/15/30m/day OI & premium levels (Upstox).
+
+    Heavier than /api/live — poll every ~12–15s. Prices still use /api/live @ 3s.
+    """
+    try:
+        from app.oi_board import build_chain_board
+        from app.calendar_util import now_str
+
+        board = build_chain_board(band=3, with_windows=True)
+        return {
+            "ok": bool(board.get("ok")),
+            "last_updated": now_str(),
+            "oi_board": board,
+            "error": board.get("error"),
+        }
+    except Exception as e:
+        log.exception("live-chain")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/live")
 @app.post("/api/live")
 def live_indices():

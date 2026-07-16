@@ -1,11 +1,15 @@
 """
-Clean Call | Strike | Put OI board for Live Market.
+Live Market OI board — Call | Strike | Put
 
-- Left: Call OI, day Δ, LTP, prem Δ
-- Center: Strike (ATM / Support green / Resistance red / MaxPain mark)
-- Right: Put LTP, prem Δ, OI, day Δ
-- Band: ATM ±3 (plus wall strikes if just outside)
-- Readout: what OI is doing + likely next move (simple)
+User ask:
+  ATM (e.g. 24100) ± 3 strikes
+  For each CE & PE show actual OI & premium at:
+    now · 5 min ago · 15 min ago · 30 min ago · day open (~9:15)
+  plus Δ (inc/dec) vs those points
+  Strike marks: ATM / SUPPORT(green) / RESIST(red) / MAX PAIN
+  Simple readout: kya ho raha hai / aage kya
+
+Data: Upstox option/chain (live OI+LTP) + v3 1-min candles (history of OI+close)
 """
 from __future__ import annotations
 
@@ -17,20 +21,11 @@ from app import upstox_api as ux
 log = logging.getLogger(__name__)
 
 
-def _f(v: Any) -> float | None:
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
 def _chg_str(n: float | None, pct: float | None = None) -> str:
     if n is None:
         return "—"
     sign = "+" if n > 0 else ""
-    if abs(n) >= 100:
+    if abs(n) >= 50:
         s = f"{sign}{n:,.0f}"
     else:
         s = f"{sign}{n:.2f}"
@@ -40,102 +35,171 @@ def _chg_str(n: float | None, pct: float | None = None) -> str:
     return s
 
 
-def _band_strikes(rows: list[dict], spot: float, n: int = 3) -> list[dict]:
+def _pct(a: float | None, b: float | None) -> float | None:
+    if a is None or b in (None, 0):
+        return None
+    return round(100.0 * (a - b) / b, 1)
+
+
+def _delta(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None:
+        return None
+    return a - b
+
+
+def _snap_vals(w: dict | None, key: str) -> dict[str, float | None]:
+    """Extract absolute oi/close at now, 5m, 15m, 30m, day_open from oi_premium_windows()."""
+    w = w or {}
+    out = {}
+    for name, sk in (
+        ("now", "now"),
+        ("m5", "m5"),
+        ("m15", "m15"),
+        ("m30", "m30"),
+        ("open", "day_open"),
+    ):
+        snap = w.get(sk) or {}
+        out[name] = snap.get(key)
+    return out
+
+
+def _band_rows(rows: list[dict], spot: float, n: int = 3) -> list[dict]:
     strikes = sorted({r["strike"] for r in rows})
     if not strikes:
         return []
     ai = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
     lo, hi = max(0, ai - n), min(len(strikes), ai + n + 1)
     band = set(strikes[lo:hi])
-    # always include top CE and PE walls if nearby (±2 steps outside)
-    ce_wall = max(rows, key=lambda r: r["ce_oi"])
-    pe_wall = max(rows, key=lambda r: r["pe_oi"])
-    for w in (ce_wall["strike"], pe_wall["strike"]):
-        if w in strikes:
-            wi = strikes.index(w)
-            if abs(wi - ai) <= n + 2:
-                band.add(w)
+    # include walls if close
+    ce_wall = max(rows, key=lambda r: r["ce_oi"])["strike"]
+    pe_wall = max(rows, key=lambda r: r["pe_oi"])["strike"]
+    for w in (ce_wall, pe_wall):
+        if w in strikes and abs(strikes.index(w) - ai) <= n + 2:
+            band.add(w)
     out = [r for r in rows if r["strike"] in band]
-    out.sort(key=lambda r: r["strike"], reverse=True)  # high strike on top (classic)
+    out.sort(key=lambda r: r["strike"], reverse=True)
     return out
 
 
-def _readout(
-    label: str,
-    spot: float,
-    atm: float,
-    mp: float | None,
-    pcr: float | None,
-    ce_wall: float,
-    pe_wall: float,
-    tot_ce_d: float,
-    tot_pe_d: float,
-) -> dict[str, str]:
-    """Human OI conclusion for scalp / next hour."""
-    bits = []
-    bias = "RANGE"
-    # PCR
-    if pcr is not None:
-        if pcr >= 1.2:
-            bits.append(f"PCR {pcr:.2f} high → put-heavy (support bias)")
-        elif pcr <= 0.7:
-            bits.append(f"PCR {pcr:.2f} low → call-heavy (resistance overhead)")
-        else:
-            bits.append(f"PCR {pcr:.2f} balanced")
+def _side_block(live_oi, live_ltp, windows: dict, field_oi="oi", field_px="close") -> dict:
+    """Absolute levels + changes for one side (CE or PE)."""
+    abs_oi = _snap_vals(windows, field_oi)
+    abs_px = _snap_vals(windows, field_px)
+    # prefer live chain for "now"
+    oi_now = abs_oi.get("now") if abs_oi.get("now") is not None else live_oi
+    px_now = abs_px.get("now") if abs_px.get("now") is not None else live_ltp
 
-    # Walls vs spot
-    pe_dist = 100 * (spot - pe_wall) / spot
-    ce_dist = 100 * (ce_wall - spot) / spot
-    bits.append(f"Support (put wall) {pe_wall:,.0f} ({pe_dist:.1f}% below)")
-    bits.append(f"Resistance (call wall) {ce_wall:,.0f} ({ce_dist:.1f}% above)")
+    def pack(level_now, levels, label):
+        old = levels.get(label)
+        d = _delta(level_now, old)
+        p = _pct(level_now, old)
+        return {
+            "at": old,
+            "chg": d,
+            "chg_pct": p,
+            "disp": _chg_str(d, p) if d is not None else "—",
+            "at_disp": f"{old:,.0f}" if old is not None and field_oi == "oi" else (
+                f"{old:.2f}" if old is not None else "—"
+            ),
+        }
 
-    if mp is not None:
-        mp_dist = 100 * (mp - spot) / spot
-        bits.append(f"Max pain {mp:,.0f} ({mp_dist:+.1f}% from spot)")
+    # for premium use 2 decimals in at_disp
+    def pack_px(level_now, levels, label):
+        old = levels.get(label)
+        d = _delta(level_now, old)
+        p = _pct(level_now, old)
+        return {
+            "at": old,
+            "chg": d,
+            "chg_pct": p,
+            "disp": _chg_str(d, p) if d is not None else "—",
+            "at_disp": f"{old:.2f}" if old is not None else "—",
+        }
 
-    # Day OI flow
-    if tot_pe_d > abs(tot_ce_d) and tot_pe_d > 0:
-        bits.append("Day: put OI building more → dips get bought")
-        bias = "SUPPORTIVE"
-    elif tot_ce_d > abs(tot_pe_d) and tot_ce_d > 0:
-        bits.append("Day: call OI building more → upside supply / pin risk")
-        bias = "CAPPED"
-    elif tot_ce_d < 0 and tot_pe_d < 0:
-        bits.append("Day: both sides OI cutting → volatile / unwind")
-        bias = "UNWIND"
-    else:
-        bits.append("Day OI mixed → trade walls, not blind trend")
+    oi_now_f = float(oi_now) if oi_now is not None else None
+    px_now_f = float(px_now) if px_now is not None else None
 
-    # Distance to walls → scalp plan
-    if pe_dist < 0.35:
-        plan = f"Near put wall — bounce long scalp toward ATM {atm:,.0f}; SL below wall. Target ~25–35 pts."
-        bias = "BOUNCE_ZONE"
-    elif ce_dist < 0.35:
-        plan = f"Near call wall — rejection short scalp toward ATM {atm:,.0f}; SL above wall. Target ~25–35 pts."
-        bias = "REJECT_ZONE"
-    elif mp is not None and abs(100 * (mp - spot) / spot) > 0.6:
-        plan = f"Spot far from max pain — expiry week me mean-revert toward {mp:,.0f} possible; intraday still trade OR + walls."
-    else:
-        plan = f"Mid-range between walls. Scalp: break of ATM zone with OI confirm, or fade into walls. Aim 25–35 pts."
-
-    what_now = " · ".join(bits[:4])
-    what_next = plan
     return {
-        "bias": bias,
-        "what_now": what_now,
-        "what_next": what_next,
-        "headline": f"{label}: {bias.replace('_', ' ')}",
+        "oi_now": oi_now_f,
+        "oi_now_disp": f"{oi_now_f:,.0f}" if oi_now_f is not None else "—",
+        "prem_now": px_now_f,
+        "prem_now_disp": f"{px_now_f:.2f}" if px_now_f is not None else "—",
+        "oi_5m": pack(oi_now_f, abs_oi, "m5"),
+        "oi_15m": pack(oi_now_f, abs_oi, "m15"),
+        "oi_30m": pack(oi_now_f, abs_oi, "m30"),
+        "oi_open": pack(oi_now_f, abs_oi, "open"),
+        "prem_5m": pack_px(px_now_f, abs_px, "m5"),
+        "prem_15m": pack_px(px_now_f, abs_px, "m15"),
+        "prem_30m": pack_px(px_now_f, abs_px, "m30"),
+        "prem_open": pack_px(px_now_f, abs_px, "open"),
+        # absolute at times (what user asked: 1:25 pe kya tha)
+        "oi_at_5m": abs_oi.get("m5"),
+        "oi_at_15m": abs_oi.get("m15"),
+        "oi_at_30m": abs_oi.get("m30"),
+        "oi_at_open": abs_oi.get("open"),
+        "prem_at_5m": abs_px.get("m5"),
+        "prem_at_15m": abs_px.get("m15"),
+        "prem_at_30m": abs_px.get("m30"),
+        "prem_at_open": abs_px.get("open"),
+        "ts_5m": (windows or {}).get("m5", {}).get("ts"),
+        "ts_15m": (windows or {}).get("m15", {}).get("ts"),
+        "ts_30m": (windows or {}).get("m30", {}).get("ts"),
+        "ts_open": (windows or {}).get("day_open", {}).get("ts"),
+        "ts_now": (windows or {}).get("now", {}).get("ts"),
     }
 
 
-def build_chain_board(band: int = 3) -> dict[str, Any]:
+def _readout(label, spot, atm, mp, pcr, ce_wall, pe_wall, tot_ce_d, tot_pe_d) -> dict:
+    bits = []
+    bias = "RANGE"
+    if pcr is not None:
+        if pcr >= 1.2:
+            bits.append(f"PCR {pcr:.2f} put-heavy (support bias)")
+        elif pcr <= 0.7:
+            bits.append(f"PCR {pcr:.2f} call-heavy (supply up)")
+        else:
+            bits.append(f"PCR {pcr:.2f} balanced")
+
+    pe_dist = 100 * (spot - pe_wall) / spot if pe_wall else 99
+    ce_dist = 100 * (ce_wall - spot) / spot if ce_wall else 99
+    bits.append(f"Support {pe_wall:,.0f}" if pe_wall else "")
+    bits.append(f"Resist {ce_wall:,.0f}" if ce_wall else "")
+    if mp is not None:
+        bits.append(f"Max pain {float(mp):,.0f}")
+
+    if pe_dist < 0.35:
+        bias = "BOUNCE"
+        plan = f"Near put wall — long scalp to ATM {atm:,.0f}, target +25–35, SL below wall."
+    elif ce_dist < 0.35:
+        bias = "REJECT"
+        plan = f"Near call wall — short scalp to ATM {atm:,.0f}, target −25–35, SL above wall."
+    elif tot_pe_d > 0 and tot_pe_d > abs(tot_ce_d):
+        bias = "SUPPORTIVE"
+        plan = "Put OI building — buy dips near support; avoid panic shorts."
+    elif tot_ce_d > 0 and tot_ce_d > abs(tot_pe_d):
+        bias = "CAPPED"
+        plan = "Call OI building — sell rips into resistance; trail longs tight."
+    else:
+        plan = f"Mid walls. Scalp OR break or fade into S/R. Aim 25–35 pts around ATM {atm:,.0f}."
+
+    return {
+        "bias": bias,
+        "headline": f"{label}: {bias}",
+        "what_now": " · ".join([x for x in bits if x])[:220],
+        "what_next": plan,
+    }
+
+
+def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any]:
     """
-    Full payload for Live Market OI board.
+    with_windows=True → fetch 1m candles for every CE/PE in ATM±3 (heavier).
+    Call every ~15s from UI; live OI/LTP can refresh more often via same endpoint
+    when with_windows=False for a lighter tick (optional).
     """
     if not ux.enabled():
         return {
             "ok": False,
-            "error": "UPSTOX_ACCESS_TOKEN required for OI chain",
+            "error": "UPSTOX_ACCESS_TOKEN required",
             "boards": [],
         }
 
@@ -148,18 +212,16 @@ def build_chain_board(band: int = 3) -> dict[str, Any]:
                 {
                     "label": label,
                     "ok": False,
-                    "error": (ux.LAST_ERROR or {}).get("body")
-                    or "Chain empty — check token / expiry",
+                    "error": "Chain empty — token / expiry / market",
                     "rows": [],
                 }
             )
             continue
 
         mp_data = ux.max_pain_api(key, "current_week")
-        mp = None
-        if isinstance(mp_data, dict):
-            mp = mp_data.get("max_pain")
-            expiry = expiry or str(mp_data.get("expiry_date") or "")[:10]
+        mp = mp_data.get("max_pain") if isinstance(mp_data, dict) else None
+        if isinstance(mp_data, dict) and mp_data.get("expiry_date"):
+            expiry = expiry or str(mp_data.get("expiry_date"))[:10]
         if mp is None:
             mp = ux.compute_max_pain_from_rows(rows)
 
@@ -168,40 +230,12 @@ def build_chain_board(band: int = 3) -> dict[str, Any]:
         pe_wall = walls.get("pe_wall_strike")
         atm = ux.atm_row(rows, spot)
         atm_strike = atm["strike"] if atm else None
-
-        band_rows = _band_strikes(rows, spot, n=band)
-
-        # Optional light candle Δ only for ATM CE/PE (speed) — day Δ from prev_oi always
-        atm_ce_w = atm_pe_w = {}
-        if atm and atm.get("ce_key"):
-            try:
-                atm_ce_w = ux.oi_premium_windows(atm["ce_key"])
-            except Exception:
-                pass
-        if atm and atm.get("pe_key"):
-            try:
-                atm_pe_w = ux.oi_premium_windows(atm["pe_key"])
-            except Exception:
-                pass
+        band_rows = _band_rows(rows, spot, n=band)
 
         table = []
         for r in band_rows:
             strike = r["strike"]
-            ce_d = r["ce_oi"] - (r.get("ce_prev_oi") or 0)
-            pe_d = r["pe_oi"] - (r.get("pe_prev_oi") or 0)
-            ce_dp = (
-                round(100 * ce_d / r["ce_prev_oi"], 1)
-                if r.get("ce_prev_oi")
-                else None
-            )
-            pe_dp = (
-                round(100 * pe_d / r["pe_prev_oi"], 1)
-                if r.get("pe_prev_oi")
-                else None
-            )
-
-            marks = []
-            mark_class = ""
+            marks, mark_class = [], ""
             if atm_strike is not None and abs(strike - atm_strike) < 0.01:
                 marks.append("ATM")
                 mark_class = "atm"
@@ -213,47 +247,42 @@ def build_chain_board(band: int = 3) -> dict[str, Any]:
                 mark_class = "resist"
             if mp is not None and abs(strike - float(mp)) < 0.01:
                 marks.append("MAX PAIN")
-                if mark_class == "atm":
-                    mark_class = "atm maxpain"
-                elif not mark_class:
-                    mark_class = "maxpain"
+                mark_class = (mark_class + " maxpain").strip() if mark_class else "maxpain"
 
-            # 5/15/30 only on ATM rows to keep UI clean & API light
-            extra = {}
-            if atm_strike is not None and abs(strike - atm_strike) < 0.01:
-                extra = {
-                    "ce_oi_5m": _chg_str(
-                        (atm_ce_w.get("oi_chg") or {}).get("5m"),
-                        (atm_ce_w.get("oi_chg_pct") or {}).get("5m"),
-                    ),
-                    "ce_oi_15m": _chg_str(
-                        (atm_ce_w.get("oi_chg") or {}).get("15m"),
-                        (atm_ce_w.get("oi_chg_pct") or {}).get("15m"),
-                    ),
-                    "ce_oi_30m": _chg_str(
-                        (atm_ce_w.get("oi_chg") or {}).get("30m"),
-                        (atm_ce_w.get("oi_chg_pct") or {}).get("30m"),
-                    ),
-                    "pe_oi_5m": _chg_str(
-                        (atm_pe_w.get("oi_chg") or {}).get("5m"),
-                        (atm_pe_w.get("oi_chg_pct") or {}).get("5m"),
-                    ),
-                    "pe_oi_15m": _chg_str(
-                        (atm_pe_w.get("oi_chg") or {}).get("15m"),
-                        (atm_pe_w.get("oi_chg_pct") or {}).get("15m"),
-                    ),
-                    "pe_oi_30m": _chg_str(
-                        (atm_pe_w.get("oi_chg") or {}).get("30m"),
-                        (atm_pe_w.get("oi_chg_pct") or {}).get("30m"),
-                    ),
-                    "ce_prem_5m": _chg_str(
-                        (atm_ce_w.get("prem_chg") or {}).get("5m"),
-                        (atm_ce_w.get("prem_chg_pct") or {}).get("5m"),
-                    ),
-                    "pe_prem_5m": _chg_str(
-                        (atm_pe_w.get("prem_chg") or {}).get("5m"),
-                        (atm_pe_w.get("prem_chg_pct") or {}).get("5m"),
-                    ),
+            ce_w = pe_w = {}
+            if with_windows:
+                if r.get("ce_key"):
+                    try:
+                        ce_w = ux.oi_premium_windows(r["ce_key"])
+                    except Exception as e:
+                        log.warning("ce windows %s: %s", strike, e)
+                if r.get("pe_key"):
+                    try:
+                        pe_w = ux.oi_premium_windows(r["pe_key"])
+                    except Exception as e:
+                        log.warning("pe windows %s: %s", strike, e)
+
+            ce = _side_block(r.get("ce_oi"), r.get("ce_ltp"), ce_w)
+            pe = _side_block(r.get("pe_oi"), r.get("pe_ltp"), pe_w)
+
+            # day Δ also from chain prev_oi as backup
+            if ce.get("oi_open", {}).get("at") is None and r.get("ce_prev_oi"):
+                d = _delta(ce.get("oi_now"), r.get("ce_prev_oi"))
+                ce["oi_open"] = {
+                    "at": r.get("ce_prev_oi"),
+                    "at_disp": f"{r['ce_prev_oi']:,.0f}",
+                    "chg": d,
+                    "chg_pct": _pct(ce.get("oi_now"), r.get("ce_prev_oi")),
+                    "disp": _chg_str(d, _pct(ce.get("oi_now"), r.get("ce_prev_oi"))),
+                }
+            if pe.get("oi_open", {}).get("at") is None and r.get("pe_prev_oi"):
+                d = _delta(pe.get("oi_now"), r.get("pe_prev_oi"))
+                pe["oi_open"] = {
+                    "at": r.get("pe_prev_oi"),
+                    "at_disp": f"{r['pe_prev_oi']:,.0f}",
+                    "chg": d,
+                    "chg_pct": _pct(pe.get("oi_now"), r.get("pe_prev_oi")),
+                    "disp": _chg_str(d, _pct(pe.get("oi_now"), r.get("pe_prev_oi"))),
                 }
 
             table.append(
@@ -261,13 +290,8 @@ def build_chain_board(band: int = 3) -> dict[str, Any]:
                     "strike": strike,
                     "marks": marks,
                     "mark_class": mark_class,
-                    "ce_oi": r["ce_oi"],
-                    "ce_oi_day": _chg_str(ce_d, ce_dp),
-                    "ce_ltp": r.get("ce_ltp"),
-                    "pe_oi": r["pe_oi"],
-                    "pe_oi_day": _chg_str(pe_d, pe_dp),
-                    "pe_ltp": r.get("pe_ltp"),
-                    **extra,
+                    "ce": ce,
+                    "pe": pe,
                 }
             )
 
@@ -291,6 +315,20 @@ def build_chain_board(band: int = 3) -> dict[str, Any]:
             tot_pe_d,
         )
 
+        # time labels from first ATM row windows if any
+        time_labels = {"now": "now", "m5": "5m ago", "m15": "15m ago", "m30": "30m ago", "open": "day open"}
+        for row in table:
+            if row.get("marks") and "ATM" in row["marks"]:
+                ce = row["ce"]
+                time_labels = {
+                    "now": ce.get("ts_now") or "now",
+                    "m5": ce.get("ts_5m") or "5m ago",
+                    "m15": ce.get("ts_15m") or "15m ago",
+                    "m30": ce.get("ts_30m") or "30m ago",
+                    "open": ce.get("ts_open") or "~9:15",
+                }
+                break
+
         boards.append(
             {
                 "label": label,
@@ -302,13 +340,12 @@ def build_chain_board(band: int = 3) -> dict[str, Any]:
                 "pcr": round(pcr, 3) if pcr is not None else None,
                 "ce_wall": ce_wall,
                 "pe_wall": pe_wall,
-                "tot_ce_oi": tot_ce,
-                "tot_pe_oi": tot_pe,
                 "tot_ce_day": _chg_str(tot_ce_d),
                 "tot_pe_day": _chg_str(tot_pe_d),
+                "time_labels": time_labels,
                 "read": read,
                 "rows": table,
             }
         )
 
-    return {"ok": True, "boards": boards, "source": "upstox"}
+    return {"ok": True, "boards": boards, "source": "upstox", "with_windows": with_windows}
