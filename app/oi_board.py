@@ -24,14 +24,52 @@ from app import upstox_api as ux
 log = logging.getLogger(__name__)
 
 
-def _chg_str(n: float | None, pct: float | None = None) -> str:
+def _fmt_oi(n: float | None, signed: bool = False) -> str:
+    """OI in Lakh / Crore (Indian). e.g. 1.25L · 2.3Cr · +0.04L"""
     if n is None:
         return "—"
-    sign = "+" if n > 0 else ""
-    if abs(n) >= 50:
-        s = f"{sign}{n:,.0f}"
+    n = float(n)
+    sign = ""
+    if signed:
+        if n > 0:
+            sign = "+"
+        elif n < 0:
+            sign = "−"
+        n = abs(n)
+    av = abs(n)
+    if av >= 1e7:  # crore
+        body = f"{av / 1e7:.2f}".rstrip("0").rstrip(".") + "Cr"
+    elif av >= 1e5:  # lakh
+        body = f"{av / 1e5:.2f}".rstrip("0").rstrip(".") + "L"
+    elif av >= 1e3:  # thousand
+        body = f"{av / 1e3:.1f}".rstrip("0").rstrip(".") + "K"
     else:
-        s = f"{sign}{n:.2f}"
+        body = f"{av:.0f}"
+    return f"{sign}{body}"
+
+
+def _fmt_prem(n: float | None, signed: bool = False) -> str:
+    if n is None:
+        return "—"
+    n = float(n)
+    if signed:
+        if n > 0:
+            return f"+{n:.1f}"
+        if n < 0:
+            return f"−{abs(n):.1f}"
+        return "0.0"
+    return f"{n:.1f}"
+
+
+def _chg_str(n: float | None, pct: float | None = None) -> str:
+    """Generic change (used for totals / readout). Prefer OI L/Cr when large."""
+    if n is None:
+        return "—"
+    if abs(n) >= 1000:
+        s = _fmt_oi(n, signed=True)
+    else:
+        sign = "+" if n > 0 else ""
+        s = f"{sign}{n:.2f}" if abs(n) < 50 else f"{sign}{n:,.0f}"
     if pct is not None:
         ps = "+" if pct > 0 else ""
         s += f" ({ps}{pct:.1f}%)"
@@ -120,13 +158,10 @@ def _side_block(live_oi, live_ltp, windows: dict) -> dict:
             "ts": ts,
             "chg": d,
             "chg_pct": p,
-            "disp": _chg_str(d, p) if d is not None else "—",
-            "at_disp": f"{old:,.0f}" if old is not None else "—",
-            # UI: "13:25 · 1,24,500" + "Δ +3,200"
-            "line1": (
-                f"@{ts} {old:,.0f}" if (ts and old is not None) else (f"{old:,.0f}" if old is not None else "—")
-            ),
-            "line2": _chg_str(d, p) if d is not None else "—",
+            "disp": _fmt_oi(d, signed=True) if d is not None else "—",
+            "at_disp": _fmt_oi(old),
+            "line1": _fmt_oi(old),  # no @ — clock only in column header
+            "line2": _fmt_oi(d, signed=True) if d is not None else "—",
         }
 
     def pack_px(level_now, levels, label):
@@ -139,12 +174,10 @@ def _side_block(live_oi, live_ltp, windows: dict) -> dict:
             "ts": ts,
             "chg": d,
             "chg_pct": p,
-            "disp": _chg_str(d, p) if d is not None else "—",
-            "at_disp": f"{old:.2f}" if old is not None else "—",
-            "line1": (
-                f"@{ts} {old:.2f}" if (ts and old is not None) else (f"{old:.2f}" if old is not None else "—")
-            ),
-            "line2": _chg_str(d, p) if d is not None else "—",
+            "disp": _fmt_prem(d, signed=True) if d is not None else "—",
+            "at_disp": _fmt_prem(old),
+            "line1": _fmt_prem(old),
+            "line2": _fmt_prem(d, signed=True) if d is not None else "—",
         }
 
     oi_now_f = float(oi_now) if oi_now is not None else None
@@ -152,9 +185,9 @@ def _side_block(live_oi, live_ltp, windows: dict) -> dict:
 
     return {
         "oi_now": oi_now_f,
-        "oi_now_disp": f"{oi_now_f:,.0f}" if oi_now_f is not None else "—",
+        "oi_now_disp": _fmt_oi(oi_now_f),
         "prem_now": px_now_f,
-        "prem_now_disp": f"{px_now_f:.2f}" if px_now_f is not None else "—",
+        "prem_now_disp": _fmt_prem(px_now_f),
         "oi_5m": pack_oi(oi_now_f, abs_oi, "m5"),
         "oi_15m": pack_oi(oi_now_f, abs_oi, "m15"),
         "oi_30m": pack_oi(oi_now_f, abs_oi, "m30"),
@@ -163,7 +196,6 @@ def _side_block(live_oi, live_ltp, windows: dict) -> dict:
         "prem_15m": pack_px(px_now_f, abs_px, "m15"),
         "prem_30m": pack_px(px_now_f, abs_px, "m30"),
         "prem_open": pack_px(px_now_f, abs_px, "open"),
-        # absolute at times (1:25 pe kya tha)
         "oi_at_5m": abs_oi.get("m5"),
         "oi_at_15m": abs_oi.get("m15"),
         "oi_at_30m": abs_oi.get("m30"),
@@ -330,26 +362,26 @@ def build_chain_board(band: int = 3, with_windows: bool = True) -> dict[str, Any
                 p = _pct(ce.get("oi_now"), r.get("ce_prev_oi"))
                 ce["oi_open"] = {
                     "at": r.get("ce_prev_oi"),
-                    "ts": "~open",
-                    "at_disp": f"{r['ce_prev_oi']:,.0f}",
+                    "ts": "open",
+                    "at_disp": _fmt_oi(r.get("ce_prev_oi")),
                     "chg": d,
                     "chg_pct": p,
-                    "disp": _chg_str(d, p),
-                    "line1": f"{r['ce_prev_oi']:,.0f}",
-                    "line2": _chg_str(d, p),
+                    "disp": _fmt_oi(d, signed=True),
+                    "line1": _fmt_oi(r.get("ce_prev_oi")),
+                    "line2": _fmt_oi(d, signed=True),
                 }
             if pe.get("oi_open", {}).get("at") is None and r.get("pe_prev_oi"):
                 d = _delta(pe.get("oi_now"), r.get("pe_prev_oi"))
                 p = _pct(pe.get("oi_now"), r.get("pe_prev_oi"))
                 pe["oi_open"] = {
                     "at": r.get("pe_prev_oi"),
-                    "ts": "~open",
-                    "at_disp": f"{r['pe_prev_oi']:,.0f}",
+                    "ts": "open",
+                    "at_disp": _fmt_oi(r.get("pe_prev_oi")),
                     "chg": d,
                     "chg_pct": p,
-                    "disp": _chg_str(d, p),
-                    "line1": f"{r['pe_prev_oi']:,.0f}",
-                    "line2": _chg_str(d, p),
+                    "disp": _fmt_oi(d, signed=True),
+                    "line1": _fmt_oi(r.get("pe_prev_oi")),
+                    "line2": _fmt_oi(d, signed=True),
                 }
 
             table.append(
