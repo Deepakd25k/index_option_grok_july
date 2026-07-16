@@ -202,34 +202,43 @@ table.oi-chain th.mid, table.oi-chain td.mid {
   align-items: center;
   gap: 2px;
   transform: translate(-50%, -50%);
-  filter: drop-shadow(0 2px 8px rgba(15, 23, 42, 0.28));
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.18));
   white-space: nowrap;
+  opacity: 0.9;
 }
 .pm-body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #0f172a;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   color: #fff;
   border-radius: 8px;
   padding: 3px 10px 4px;
-  border: 2px solid #38bdf8;
+  border: 1.5px solid rgba(56, 189, 248, 0.65);
   min-width: 92px;
   line-height: 1.15;
 }
-.price-meter.up .pm-body { border-color: #4ade80; background: #14532d; }
-.price-meter.down .pm-body { border-color: #f87171; background: #7f1d1d; }
-.pm-lbl {
-  font-size: 8px; font-weight: 800; letter-spacing: 0.12em; color: #94a3b8;
+.price-meter.up .pm-body {
+  border-color: rgba(74, 222, 128, 0.7);
+  background: rgba(20, 83, 45, 0.5);
 }
-.price-meter.up .pm-lbl, .price-meter.down .pm-lbl { color: #e2e8f0; }
+.price-meter.down .pm-body {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(127, 29, 29, 0.5);
+}
+.pm-lbl {
+  font-size: 8px; font-weight: 800; letter-spacing: 0.12em; color: rgba(226, 232, 240, 0.85);
+}
+.price-meter.up .pm-lbl, .price-meter.down .pm-lbl { color: rgba(241, 245, 249, 0.9); }
 .pm-val {
   font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums;
-  color: #f8fafc;
+  color: rgba(248, 250, 252, 0.95);
 }
-.pm-arrow { font-size: 10px; color: #38bdf8; font-weight: 800; opacity: 0.9; }
-.price-meter.up .pm-arrow { color: #4ade80; }
-.price-meter.down .pm-arrow { color: #f87171; }
+.pm-arrow { font-size: 10px; color: rgba(56, 189, 248, 0.85); font-weight: 800; }
+.price-meter.up .pm-arrow { color: rgba(74, 222, 128, 0.9); }
+.price-meter.down .pm-arrow { color: rgba(248, 113, 113, 0.9); }
 
 /* Nearest strike row when price sits there */
 tr.price-here td.mid-strike {
