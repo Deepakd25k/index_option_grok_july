@@ -51,9 +51,9 @@ function clsFromDisplay(display, value) {
   return clsNum(value);
 }
 
-/** Switch Sheet / FII OI / Daily Log / Significance */
+/** Tab roles: pre | live | fii | structure | history | guide */
 function switchTab(name) {
-  const tabName = name || "sheet";
+  const tabName = name || "pre";
   document.querySelectorAll(".tab").forEach((t) => {
     t.classList.toggle("active", t.getAttribute("data-tab") === tabName);
   });
@@ -68,44 +68,87 @@ function switchTab(name) {
   } else {
     console.error("Panel not found:", "panel-" + tabName);
   }
-  if (tabName === "docs") loadDocs();
+  if (tabName === "guide") loadDocs();
   if (tabName === "history") loadHistory().catch(() => {});
-  if (tabName === "edge") {
-    /* re-render from last snapshot if present */
-    if (window.__lastSnap) renderProEdge(window.__lastSnap);
+  if (window.__lastSnap) {
+    if (tabName === "pre") renderPre(window.__lastSnap);
+    if (tabName === "live") renderLive(window.__lastSnap);
+    if (tabName === "fii") renderFii(window.__lastSnap);
+    if (tabName === "structure") renderStructure(window.__lastSnap);
   }
-  // scroll to top of content so user sees panel change
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
-
-// expose for inline onclick fallback
 window.switchTab = switchTab;
 
-function renderProEdge(data) {
-  const pe = (data && data.pro_edge) || {};
-  const head = el("edgeHeadline");
-  const blurb = el("edgeBlurb");
-  const built = el("edgeBuilt");
-  const sigBox = el("edgeSignals");
-  const blocks = el("edgeBlocks");
-  if (head) head.textContent = pe.headline || "Pro Edge";
-  if (blurb) blurb.textContent = pe.blurb || "";
-  if (built) built.textContent = pe.built_at ? "Built " + pe.built_at : "";
-  if (sigBox) {
-    sigBox.innerHTML = "";
-    (pe.active_signals || []).forEach((s) => {
-      const chip = document.createElement("span");
-      chip.className = "edge-chip";
-      chip.textContent = s;
-      sigBox.appendChild(chip);
-    });
-  }
-  if (!blocks) return;
-  blocks.innerHTML = "";
-  const list = pe.blocks || [];
+/** Which column_groups go to which tab (no cross-duplication) */
+const TAB_GROUPS = {
+  pre: ["Meta", "Gap", "US", "Asia", "Europe"],
+  live: ["India"], // Nifty BN Sensex VIX only
+};
+
+function renderGroupTables(containerId, groups, filterNames) {
+  const root = el(containerId);
+  if (!root) return;
+  root.innerHTML = "";
+  const list = (groups || []).filter((g) =>
+    filterNames ? filterNames.includes(g.group) : true
+  );
   if (!list.length) {
-    blocks.innerHTML =
-      '<div class="edge-empty">No Pro Edge data yet — click <strong>↻ Refresh</strong>.</div>';
+    root.innerHTML =
+      '<div class="edge-empty">No rows yet — click <strong>↻ Refresh</strong>.</div>';
+    return;
+  }
+  list.forEach((g) => {
+    const block = document.createElement("div");
+    block.className = "group-block";
+    let titleCls = "group-title";
+    if (g.group === "Europe") titleCls += " g-Europe";
+    if (g.group === "Gap") titleCls += " g-Gap";
+    if (String(g.group).includes("OI")) titleCls += " oi";
+    block.innerHTML = `<div class="${titleCls}">${g.group}</div>`;
+    const table = document.createElement("table");
+    table.className = "sheet";
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>Column</th>
+          <th>Value</th>
+          <th>Kyun important</th>
+          <th>Kab dekhna</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody></tbody>`;
+    const tbody = table.querySelector("tbody");
+    (g.columns || []).forEach((col) => {
+      // Live tab: only India index keys (not FII columns if mixed)
+      if (filterNames && filterNames.includes("India") && g.group === "India") {
+        const allow = ["nifty", "banknifty", "sensex", "vix"];
+        if (!allow.includes(col.key)) return;
+      }
+      const tr = document.createElement("tr");
+      const val = displayCell(col);
+      tr.innerHTML = `
+        <td class="col-key">${col.label}<div style="font-size:10px;color:#999">${col.key}</div></td>
+        <td class="col-val ${clsFromDisplay(val, col.value)}">${val}</td>
+        <td class="col-why">${col.why || ""}</td>
+        <td class="col-when">${col.when || ""}</td>
+        <td>${col.src || ""}</td>`;
+      tbody.appendChild(tr);
+    });
+    block.appendChild(table);
+    root.appendChild(block);
+  });
+}
+
+function renderEdgeBlocksInto(containerId, blocks) {
+  const root = el(containerId);
+  if (!root) return;
+  root.innerHTML = "";
+  const list = blocks || [];
+  if (!list.length) {
+    root.innerHTML =
+      '<div class="edge-empty">No data — click <strong>↻ Refresh</strong> (Upstox token may be required).</div>';
     return;
   }
   list.forEach((block) => {
@@ -116,20 +159,20 @@ function renderProEdge(data) {
       : block.oi_date
         ? `<span class="note-sm">OI date ${block.oi_date}</span>`
         : "";
-    wrap.innerHTML = `<div class="edge-block-head"><span>${block.section || "Section"}</span>${note}</div>`;
+    wrap.innerHTML = `<div class="edge-block-head"><span>${block.section || ""}</span>${note}</div>`;
     const grid = document.createElement("div");
     grid.className = "edge-grid";
     const cards = block.cards || [];
     if (!cards.length) {
       grid.innerHTML =
-        '<div class="edge-empty" style="grid-column:1/-1">Nothing in this block right now.</div>';
+        '<div class="edge-empty" style="grid-column:1/-1">Empty block.</div>';
     }
     cards.forEach((c) => {
       const card = document.createElement("div");
       card.className = "edge-card";
       const sig = c.signal
         ? `<div class="ec-signal${
-            /⚠️|risk|conflict|Defensive|stress|lag/i.test(c.signal) ? "" : " ok"
+            /⚠️|risk|Defensive|short build|stress/i.test(c.signal) ? "" : " ok"
           }">${c.signal}</div>`
         : "";
       card.innerHTML = `
@@ -141,145 +184,116 @@ function renderProEdge(data) {
       grid.appendChild(card);
     });
     wrap.appendChild(grid);
-    blocks.appendChild(wrap);
+    root.appendChild(wrap);
   });
 }
 
-function renderSnapshot(data) {
-  if (!data) return;
-  window.__lastSnap = data;
-  renderProEdge(data);
-  const setText = (id, text) => {
-    const n = el(id);
-    if (n) n.textContent = text;
-  };
+function proBlocksBySection(data, matcher) {
+  const pe = (data && data.pro_edge) || {};
+  return (pe.blocks || []).filter((b) => matcher(String(b.section || "")));
+}
 
-  setText("lastUpdated", data.last_updated || "—");
-  setText("dateDay", `${data.date || "—"} · ${data.day || ""}`);
+function setText(id, text) {
+  const n = el(id);
+  if (n) n.textContent = text;
+}
+
+function renderPre(data) {
+  setText("preDateDay", `${data.date || "—"} · ${data.day || ""}`);
   setText(
-    "trading",
-    data.is_trading
-      ? "YES ✅"
-      : `NO ❌ ${data.holiday || data.reason || ""}`
+    "preTrading",
+    data.is_trading ? "YES ✅" : `NO ❌ ${data.holiday || data.reason || ""}`
   );
+  setText("preUpdated", data.last_updated || "—");
   setText(
-    "sources",
+    "preSources",
     (Array.isArray(data.sources) ? data.sources : []).join(" · ") || "—"
   );
-
   setText(
-    "gapPct",
-    data.gap_pct != null
-      ? `${data.gap_pct >= 0 ? "+" : ""}${(Number(data.gap_pct) * 100).toFixed(2)}%`
-      : "—"
-  );
-  const gapCat = el("gapCat");
-  if (gapCat) {
-    gapCat.textContent = data.gap_category || "—";
-    gapCat.className = "tag " + (data.gap_category || "");
-  }
-  // Prefer "price (chg%)" display strings everywhere
-  setText(
-    "gift",
-    data.gift_display ||
-      (data.gift_chg_pct != null
-        ? `${fmt(data.gift)} (${data.gift_chg_pct > 0 ? "+" : ""}${Number(data.gift_chg_pct).toFixed(2)}%)`
-        : fmt(data.gift))
+    "preGift",
+    data.gift_display || fmt(data.gift) || "—"
   );
   setText(
-    "gapPts",
+    "preGapPts",
     data.gap_pts != null
       ? data.gap_pct != null
         ? `${fmt(data.gap_pts)} pts (${data.gap_pct >= 0 ? "+" : ""}${(data.gap_pct * 100).toFixed(2)}%)`
         : fmt(data.gap_pts) + " pts"
       : "—"
   );
-
-  const fii = el("fii");
-  const dii = el("dii");
-  if (fii) {
-    const raw = data.fii_cash_net ?? data.fii_net;
-    fii.textContent =
-      (data.columns || []).find((c) => c.key === "fii_cash_net")?.display ||
-      fmt(raw);
-    fii.className = clsNum(raw);
-  }
-  if (dii) {
-    const raw = data.dii_cash_net ?? data.dii_net;
-    dii.textContent =
-      (data.columns || []).find((c) => c.key === "dii_cash_net")?.display ||
-      fmt(raw);
-    dii.className = clsNum(raw);
-  }
-
   setText(
-    "futL",
-    data.fii_idx_fut_long_display || fmt(data.fii_idx_fut_long) || "—"
+    "preGapPct",
+    data.gap_pct != null
+      ? `${data.gap_pct >= 0 ? "+" : ""}${(Number(data.gap_pct) * 100).toFixed(2)}%`
+      : "—"
   );
-  setText(
-    "futS",
-    "Short: " +
-      (data.fii_idx_fut_short_display || fmt(data.fii_idx_fut_short) || "—")
-  );
-
-  // Column groups on Sheet tab
-  const root = el("groups");
-  if (root) {
-    root.innerHTML = "";
-    (data.column_groups || []).forEach((g) => {
-      const block = document.createElement("div");
-      block.className = "group-block";
-      const isOi = g.group && String(g.group).includes("OI");
-      const isEu = g.group === "Europe";
-      const isGap = g.group === "Gap";
-      let titleCls = "group-title";
-      if (isOi) titleCls += " oi";
-      if (isEu) titleCls += " g-Europe";
-      if (isGap) titleCls += " g-Gap";
-      block.innerHTML = `<div class="${titleCls}">${g.group}</div>`;
-      const table = document.createElement("table");
-      table.className = "sheet";
-      table.innerHTML = `
-        <thead>
-          <tr>
-            <th>Column</th>
-            <th>Value</th>
-            <th>Kyun important</th>
-            <th>Kab dekhna</th>
-            <th>Source</th>
-          </tr>
-        </thead>
-        <tbody></tbody>`;
-      const tbody = table.querySelector("tbody");
-      (g.columns || []).forEach((col) => {
-        const tr = document.createElement("tr");
-        const val = displayCell(col);
-        const numClass = clsFromDisplay(val, col.value);
-        tr.innerHTML = `
-          <td class="col-key">${col.label}<div style="font-size:10px;color:#999">${col.key}</div></td>
-          <td class="col-val ${numClass}">${val}</td>
-          <td class="col-why">${col.why || ""}</td>
-          <td class="col-when">${col.when || ""}</td>
-          <td>${col.src || ""}</td>`;
-        tbody.appendChild(tr);
-      });
-      block.appendChild(table);
-      root.appendChild(block);
-    });
+  const gapCat = el("preGapCat");
+  if (gapCat) {
+    gapCat.textContent = data.gap_category || "—";
+    gapCat.className = "tag " + (data.gap_category || "");
   }
+  renderGroupTables("preGroups", data.column_groups, TAB_GROUPS.pre);
+}
 
+function renderLive(data) {
+  setText("liveCardNifty", data.nifty_display || fmt(data.nifty) || "—");
+  setText("liveCardBN", data.banknifty_display || fmt(data.banknifty) || "—");
+  setText("liveCardSensex", data.sensex_display || fmt(data.sensex) || "—");
+  setText("liveCardVix", data.vix_display || fmt(data.vix) || "—");
+  ["liveCardNifty", "liveCardBN", "liveCardSensex", "liveCardVix"].forEach(
+    (id) => {
+      const n = el(id);
+      if (n) n.className = "big " + clsFromDisplay(n.textContent, null);
+    }
+  );
+  renderGroupTables("liveGroups", data.column_groups, TAB_GROUPS.live);
+  // Futures ORB only from pro_edge
+  const orb = proBlocksBySection(data, (s) =>
+    /futures ORB|ORB & futures/i.test(s)
+  );
+  renderEdgeBlocksInto("liveOrbBlocks", orb);
+}
+
+function renderFii(data) {
+  const cash =
+    (data.columns || []).find((c) => c.key === "fii_cash_net")?.display ||
+    fmt(data.fii_cash_net ?? data.fii_net);
+  setText("fiiCash", cash || "—");
+  const n = el("fiiCash");
+  if (n) n.className = "big " + clsNum(data.fii_cash_net ?? data.fii_net);
+
+  const book = proBlocksBySection(data, (s) => /FII book/i.test(s));
+  const score = proBlocksBySection(data, (s) => /scorecard|edge scorecard/i.test(s));
+  renderEdgeBlocksInto("fiiBookBlocks", book);
+  renderEdgeBlocksInto("fiiScoreBlocks", score);
   renderOi(data);
+}
+
+function renderStructure(data) {
+  const blocks = proBlocksBySection(data, (s) =>
+    /Option structure/i.test(s)
+  );
+  renderEdgeBlocksInto("structureBlocks", blocks);
+}
+
+function renderSnapshot(data) {
+  if (!data) return;
+  window.__lastSnap = data;
+  renderPre(data);
+  renderLive(data);
+  renderFii(data);
+  renderStructure(data);
 
   const status = el("status");
   if (status) {
     if (!data.upstox_enabled) {
-      status.textContent = "OK · GIFT needs Upstox token";
+      status.textContent = "OK · set Upstox token for live + structure";
       status.className = "pill warn";
     } else if ((data.errors || []).length) {
       status.textContent = "Partial · " + data.errors.join(", ");
       status.className = "pill warn";
     } else {
-      status.textContent = "Live · sources OK";
+      status.textContent = "Ready · tabs by role";
       status.className = "pill ok";
     }
   }
@@ -522,7 +536,7 @@ function wireUi() {
   });
 
   // ensure sheet panel visible initially
-  switchTab("sheet");
+  switchTab("pre");
 }
 
 // Boot when DOM ready
@@ -634,18 +648,14 @@ async function pollLiveIndices() {
     }
     window.__lastSnap = snap;
 
-    // Only rebuild Sheet groups if Sheet tab is active (avoid thrashing Pro Edge DOM)
-    const sheetOn = el("panel-sheet")?.classList.contains("active");
-    if (sheetOn) {
-      const lu = el("lastUpdated");
-      if (lu) lu.textContent = snap.last_updated || "—";
-      const groups = el("groups");
-      if (groups && snap.column_groups) {
-        // light update: re-run renderSnapshot but skip pro-edge heavy if already painted
-        const pe = snap.pro_edge;
-        renderSnapshot(snap);
-        if (pe) snap.pro_edge = pe;
-      }
+    // Live tab cards + India group only when Live tab active
+    const liveOn = el("panel-live")?.classList.contains("active");
+    if (liveOn) {
+      renderLive(snap);
+    }
+    // Keep pre GIFT if live gift updated
+    if (j.gift_display && el("panel-pre")?.classList.contains("active")) {
+      setText("preGift", j.gift_display);
     }
   } catch (e) {
     const dot = el("liveDot");

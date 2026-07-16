@@ -3,10 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Index Data Auto — Column Sheet</title>
+  <title>Index Data Auto</title>
   <link rel="stylesheet" href="/static/style.css" />
   <style>
-    /* Force panel visibility — overrides any cache/specificity issues */
     .panel { display: none !important; }
     .panel.active { display: block !important; }
     .tab { cursor: pointer; user-select: none; }
@@ -19,23 +18,23 @@
       <span class="logo">📊</span>
       <div>
         <h1>Index_Data_Auto</h1>
-        <p class="sub">Sheet = market tape · Pro Edge = FII-only + Upstox chain/futures · live indices</p>
+        <p class="sub">Har tab = alag role · Live = Upstox · FII / Structure = pro only</p>
       </div>
     </div>
     <div class="actions">
       <nav class="tabs" role="tablist">
-        <button type="button" class="tab active" data-tab="sheet" onclick="switchTab('sheet')">Sheet</button>
-        <button type="button" class="tab" data-tab="edge" onclick="switchTab('edge')">Pro Edge</button>
-        <button type="button" class="tab" data-tab="oi" onclick="switchTab('oi')">FII OI</button>
+        <button type="button" class="tab active" data-tab="pre" onclick="switchTab('pre')">Pre-Market</button>
+        <button type="button" class="tab" data-tab="live" onclick="switchTab('live')">Live Market</button>
+        <button type="button" class="tab" data-tab="fii" onclick="switchTab('fii')">FII Data</button>
+        <button type="button" class="tab" data-tab="structure" onclick="switchTab('structure')">Structure</button>
         <button type="button" class="tab" data-tab="history" onclick="switchTab('history')">Daily Log</button>
-        <button type="button" class="tab" data-tab="docs" onclick="switchTab('docs')">Significance</button>
+        <button type="button" class="tab" data-tab="guide" onclick="switchTab('guide')">Guide</button>
       </nav>
       <span id="status" class="pill">Loading…</span>
       <button type="button" id="btnRefresh" class="btn primary">↻ Refresh</button>
     </div>
   </header>
 
-  <!-- Always-on live strip — Upstox primary, polls continuously -->
   <div class="live-strip" id="liveStrip">
     <span class="live-dot" id="liveDot" title="Live feed"></span>
     <span class="live-src" id="liveSrc">LIVE</span>
@@ -48,78 +47,109 @@
   </div>
 
   <main>
-    <section id="panel-sheet" class="panel active" role="tabpanel">
-      <div class="meta grid4">
-        <div class="card"><label>Last updated</label><div id="lastUpdated" class="val">—</div></div>
-        <div class="card"><label>Date / Day</label><div id="dateDay" class="val">—</div></div>
-        <div class="card"><label>Trading day?</label><div id="trading" class="val">—</div></div>
-        <div class="card"><label>Sources</label><div id="sources" class="val small">—</div></div>
-      </div>
-
-      <div class="highlights grid4">
-        <div class="card hl">
-          <label>Expected Gap</label>
-          <div class="big" id="gapPts">—</div>
-          <div class="muted" id="gapPct">—</div>
-          <div class="tag" id="gapCat">—</div>
+    <!-- ════════ PRE-MARKET ════════ -->
+    <section id="panel-pre" class="panel active" role="tabpanel">
+      <div class="role-banner pre">
+        <div>
+          <h2>Pre-Market</h2>
+          <p class="role-desc"><strong>Role:</strong> 7:30–9:15 IST open se pehle bias. Overnight globals + GIFT gap. Intraday yahan nahi.</p>
         </div>
+        <div class="role-when">Use before 9:15</div>
+      </div>
+      <div class="meta grid4">
+        <div class="card"><label>Session</label><div id="preDateDay" class="val">—</div></div>
+        <div class="card"><label>Trading day?</label><div id="preTrading" class="val">—</div></div>
+        <div class="card"><label>Last full refresh</label><div id="preUpdated" class="val">—</div></div>
+        <div class="card"><label>Sources</label><div id="preSources" class="val small">—</div></div>
+      </div>
+      <div class="highlights grid3">
         <div class="card hl gift">
           <label>GIFT Nifty</label>
-          <div class="big" id="gift">—</div>
-          <div class="muted">auto · Upstox</div>
+          <div class="big" id="preGift">—</div>
+          <div class="muted">Strongest open lead</div>
         </div>
         <div class="card hl">
-          <label>FII / DII Cash ₹Cr</label>
-          <div class="big dual"><span id="fii">—</span><span class="sep">/</span><span id="dii">—</span></div>
+          <label>Expected Gap</label>
+          <div class="big" id="preGapPts">—</div>
+          <div class="muted" id="preGapPct">—</div>
+          <div class="tag" id="preGapCat">—</div>
         </div>
         <div class="card hl">
-          <label>FII Idx Fut L / S</label>
-          <div class="big dual smallish"><span id="futL">—</span></div>
-          <div class="muted" id="futS">—</div>
+          <label>Gap meaning</label>
+          <div class="val small">Small = range ORB · Medium = selective · Large = trend/gap-fill plan</div>
         </div>
       </div>
-
-      <div id="groups"></div>
+      <div id="preGroups"></div>
     </section>
 
-    <!-- PRO EDGE — advanced clean cards -->
-    <section id="panel-edge" class="panel" role="tabpanel">
-      <div class="edge-hero">
+    <!-- ════════ LIVE MARKET ════════ -->
+    <section id="panel-live" class="panel" role="tabpanel">
+      <div class="role-banner live">
         <div>
-          <h2 id="edgeHeadline">Pro Edge</h2>
-          <p id="edgeBlurb" class="edge-blurb">Loading advanced signals…</p>
+          <h2>Live Market</h2>
+          <p class="role-desc"><strong>Role:</strong> 9:15–15:30 continuous tape. <strong>Upstox live</strong> Nifty / BN / Sensex / VIX + futures ORB/volume. FII history yahan nahi.</p>
         </div>
-        <div class="edge-meta" id="edgeBuilt">—</div>
+        <div class="role-when">Updates ~10s</div>
       </div>
-      <div id="edgeSignals" class="edge-signals"></div>
-      <div id="edgeBlocks" class="edge-blocks"></div>
+      <div class="highlights grid4" id="liveCards">
+        <div class="card hl">
+          <label>Nifty 50</label>
+          <div class="big" id="liveCardNifty">—</div>
+          <div class="muted">Upstox live</div>
+        </div>
+        <div class="card hl">
+          <label>BankNifty</label>
+          <div class="big" id="liveCardBN">—</div>
+          <div class="muted">Upstox live</div>
+        </div>
+        <div class="card hl">
+          <label>Sensex</label>
+          <div class="big" id="liveCardSensex">—</div>
+          <div class="muted">Upstox live</div>
+        </div>
+        <div class="card hl">
+          <label>India VIX</label>
+          <div class="big" id="liveCardVix">—</div>
+          <div class="muted">Fear / premium</div>
+        </div>
+      </div>
+      <div id="liveGroups"></div>
+      <div id="liveOrbBlocks" class="edge-blocks"></div>
     </section>
 
-    <section id="panel-oi" class="panel" role="tabpanel">
+    <!-- ════════ FII DATA ════════ -->
+    <section id="panel-fii" class="panel" role="tabpanel">
+      <div class="role-banner fii">
+        <div>
+          <h2>FII Data</h2>
+          <p class="role-desc"><strong>Role:</strong> Smart money only — FII cash, futures, options book, week trend, next-day match. Client/Pro/DII yahan nahi.</p>
+        </div>
+        <div class="role-when">Best after 7–7:30 PM</div>
+      </div>
       <div class="meta grid4" style="margin-bottom:12px">
         <div class="card hl">
-          <label>Bias accuracy (Net L−S → next day)</label>
+          <label>FII Cash Net ₹Cr</label>
+          <div class="big" id="fiiCash">—</div>
+        </div>
+        <div class="card hl">
+          <label>Bias hit-rate (~1w)</label>
           <div class="big" id="biasAcc">—</div>
           <div class="muted" id="biasHits">—</div>
         </div>
         <div class="card hl">
-          <label>Flow accuracy (ΔNet → next day)</label>
+          <label>Flow hit-rate (~1w)</label>
           <div class="big" id="flowAcc">—</div>
           <div class="muted" id="flowHits">—</div>
         </div>
         <div class="card">
-          <label>How match works</label>
-          <div class="val small" id="matchExplain">OI of day T (evening) scored vs next session Nifty direction.</div>
-        </div>
-        <div class="card">
-          <label>FII only</label>
-          <div class="val small">DII / Pro / Client hidden. Long/Short as contracts ( % of FII book ).</div>
+          <label>Match rule</label>
+          <div class="val small" id="matchExplain">OI day T → next session Nifty direction</div>
         </div>
       </div>
-
+      <div id="fiiBookBlocks" class="edge-blocks"></div>
       <div class="sheet-wrap">
-        <div class="sheet-title">FII Index Futures OI · last ~1 week trend + next-day match</div>
-        <p class="note" id="oiMeta">Report ~7:00–7:30 PM IST · NSE fao_participant_oi</p>
+        <div class="sheet-title">FII Idx Fut week trend + next-day match</div>
+        <p class="note" id="oiMeta">NSE participant OI · FII only</p>
         <div class="table-scroll">
           <table class="sheet compact" id="oiTable">
             <thead>
@@ -131,10 +161,10 @@
                 <th>Δ Long</th>
                 <th>Δ Short</th>
                 <th>Δ Net</th>
-                <th>Bias signal</th>
-                <th>Flow signal</th>
+                <th>Bias</th>
+                <th>Flow</th>
                 <th>Next day</th>
-                <th>Nifty next %</th>
+                <th>Nifty %</th>
                 <th>Bias match</th>
                 <th>Flow match</th>
               </tr>
@@ -143,16 +173,36 @@
           </table>
         </div>
         <p class="note" id="oiLegend">
-          <strong>Bias:</strong> Net&gt;0 BULLISH (expect UP next day), Net&lt;0 BEARISH (expect DOWN).
-          <strong>Flow:</strong> ΔNet&gt;0 covering/bullish, ΔNet&lt;0 adding short/bearish.
-          <strong>Match:</strong> signal direction == next session Nifty close direction.
+          <strong>Bias:</strong> Net&gt;0 BULLISH next day · Net&lt;0 BEARISH.
+          <strong>Flow:</strong> ΔNet&gt;0 covering · ΔNet&lt;0 more short.
         </p>
       </div>
+      <div id="fiiScoreBlocks" class="edge-blocks"></div>
     </section>
 
+    <!-- ════════ STRUCTURE ════════ -->
+    <section id="panel-structure" class="panel" role="tabpanel">
+      <div class="role-banner structure">
+        <div>
+          <h2>Structure</h2>
+          <p class="role-desc"><strong>Role:</strong> Option chain structure via <strong>Upstox</strong> — max pain, PCR, call/put walls (Nifty + BankNifty). Tape / FII book yahan nahi.</p>
+        </div>
+        <div class="role-when">Needs UPSTOX token</div>
+      </div>
+      <div id="structureBlocks" class="edge-blocks"></div>
+    </section>
+
+    <!-- ════════ DAILY LOG ════════ -->
     <section id="panel-history" class="panel" role="tabpanel">
+      <div class="role-banner log">
+        <div>
+          <h2>Daily Log</h2>
+          <p class="role-desc"><strong>Role:</strong> Date-wise history archive. Review / backtest — live trading UI nahi.</p>
+        </div>
+        <div class="role-when">All sessions</div>
+      </div>
       <div class="sheet-wrap">
-        <div class="sheet-title">Daily Log · column-wise (scroll →)</div>
+        <div class="sheet-title">History · scroll →</div>
         <div class="table-scroll">
           <table class="sheet compact" id="histTable">
             <thead id="histHead"></thead>
@@ -163,18 +213,25 @@
       </div>
     </section>
 
-    <section id="panel-docs" class="panel" role="tabpanel">
+    <!-- ════════ GUIDE ════════ -->
+    <section id="panel-guide" class="panel" role="tabpanel">
+      <div class="role-banner guide">
+        <div>
+          <h2>Guide</h2>
+          <p class="role-desc"><strong>Role:</strong> Har data point ka meaning + kab dekhna. Numbers yahan nahi — sirf education.</p>
+        </div>
+        <div class="role-when">Anytime</div>
+      </div>
       <div class="sheet-wrap docs">
-        <div class="sheet-title">Significance · kab kya dekhna</div>
-        <div id="docsBody" class="docs-body">Loading guide…</div>
+        <div class="sheet-title">Significance</div>
+        <div id="docsBody" class="docs-body">Loading…</div>
       </div>
     </section>
   </main>
 
   <footer>
-    NSE OI CSV free · Yahoo Europe free · Upstox GIFT · Local JSON history (90d → weekly) · no Google bill
+    Pre = overnight bias · Live = Upstox continuous · FII = smart money · Structure = Upstox chain · Log = archive · Guide = why
   </footer>
-  <!-- cache-bust so browser loads new JS -->
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>

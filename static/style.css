@@ -138,6 +138,32 @@ table.sheet.compact td, table.sheet.compact th { padding: 5px 7px; font-size: 11
   overflow-x: auto; font-size: 12px;
 }
 
+/* ── Role banners per tab ─────────────────────────────────── */
+.role-banner {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  padding: 12px 16px; border-radius: 10px; margin-bottom: 14px;
+  border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.role-banner h2 { margin: 0 0 4px; font-size: 17px; }
+.role-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; max-width: 760px; }
+.role-desc strong { color: var(--text); }
+.role-when {
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+  padding: 4px 10px; border-radius: 999px; background: #fff; border: 1px solid var(--border);
+  color: var(--muted);
+}
+.role-banner.pre { background: linear-gradient(135deg, #eef2ff, #f8fafc); }
+.role-banner.live { background: linear-gradient(135deg, #ecfdf5, #f0fdf4); }
+.role-banner.fii { background: linear-gradient(135deg, #fff7ed, #fffbeb); }
+.role-banner.structure { background: linear-gradient(135deg, #f5f3ff, #faf5ff); }
+.role-banner.log { background: #f8fafc; }
+.role-banner.guide { background: #f1f5f9; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+@media (max-width: 900px) {
+  .grid3 { grid-template-columns: 1fr; }
+  .role-banner { flex-direction: column; }
+}
+
 /* ── Live strip (Upstox continuous) ───────────────────────── */
 .live-strip {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
