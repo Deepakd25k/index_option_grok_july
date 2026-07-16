@@ -52,33 +52,70 @@
       <div class="role-banner pre">
         <div>
           <h2>Pre-Market · Open plan</h2>
-          <p class="role-desc"><strong>Role:</strong> Kal ka FII + aaj ka GIFT/gap se <em>open bias</em>. Target: pehle 30–45 min me 25–35 pt scalp setup decide.</p>
+          <p class="role-desc"><strong>Role:</strong> Gap = <em>GIFT − Nifty prev close</em>. 09:15 ke baad ye numbers freeze. Europe 12:30 / 13:30 / 14:30 pe Nifty match track.</p>
         </div>
-        <div class="role-when">7:30–9:15</div>
+        <div class="role-when" id="preFreezeBadge">7:30–9:15</div>
       </div>
+
       <div id="prePlaybook" class="playbook neutral">
-        <div class="pb-badge">PLAN</div>
+        <div class="pb-badge" id="prePlayBadge">PLAN</div>
         <div class="pb-head" id="prePlayHead">Refresh for plan</div>
         <div class="pb-body" id="prePlayBody">—</div>
       </div>
-      <div class="highlights grid3">
-        <div class="card hl gift">
+
+      <!-- Gap hero: fixed formula, easy scan -->
+      <div class="pre-hero">
+        <div class="pre-hero-card gift">
           <label>GIFT Nifty</label>
           <div class="big" id="preGift">—</div>
-          <div class="muted">Open lead</div>
+          <div class="muted">Overnight lead</div>
         </div>
-        <div class="card hl">
-          <label>Expected Gap</label>
+        <div class="pre-hero-mid">
+          <div class="pre-formula">GIFT − Nifty prev close</div>
+          <div class="pre-arrow">→</div>
+          <div class="pre-status-line" id="preStatusLine">—</div>
+        </div>
+        <div class="pre-hero-card gap">
+          <label>Expected Gap (open)</label>
           <div class="big" id="preGapPts">—</div>
           <div class="muted" id="preGapPct">—</div>
           <div class="tag" id="preGapCat">—</div>
         </div>
-        <div class="card hl">
-          <label>Session</label>
-          <div class="val" id="preDateDay">—</div>
+        <div class="pre-hero-card base">
+          <label>Nifty Prev Close</label>
+          <div class="big sm" id="preNiftyPrev">—</div>
+          <div class="muted" id="preDateDay">—</div>
           <div class="muted" id="preTrading">—</div>
         </div>
       </div>
+
+      <!-- Global strips -->
+      <div class="pre-strips">
+        <div class="pre-strip">
+          <div class="pre-strip-title">🇺🇸 US overnight</div>
+          <div class="pre-strip-row" id="preUsStrip">—</div>
+        </div>
+        <div class="pre-strip">
+          <div class="pre-strip-title">🌏 Asia morning</div>
+          <div class="pre-strip-row" id="preAsiaStrip">—</div>
+        </div>
+        <div class="pre-strip">
+          <div class="pre-strip-title">🇪🇺 Europe (midday on Nifty)</div>
+          <div class="pre-strip-row" id="preEuStrip">—</div>
+        </div>
+      </div>
+
+      <!-- Europe influence tracker -->
+      <div class="eu-track-wrap">
+        <div class="eu-track-head">
+          <h3>Europe → Nifty influence track</h3>
+          <span class="eu-prior" id="euPrior">Prior ~55% same-direction (moderate)</span>
+        </div>
+        <p class="eu-note" id="euNote">—</p>
+        <div class="eu-summary" id="euSummary">—</div>
+        <div class="eu-windows" id="euWindows"></div>
+      </div>
+
       <div id="preGroups"></div>
     </section>
 

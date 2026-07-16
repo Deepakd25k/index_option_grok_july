@@ -209,50 +209,178 @@ function renderPre(data) {
   setText("preDateDay", `${data.date || "—"} · ${data.day || ""}`);
   setText(
     "preTrading",
-    data.is_trading ? "YES ✅" : `NO ❌ ${data.holiday || data.reason || ""}`
+    data.is_trading ? "Trading day ✅" : `Holiday/Weekend ❌ ${data.holiday || data.reason || ""}`
   );
+
+  // Freeze badge
+  const fr = el("preFreezeBadge");
+  if (fr) {
+    if (data.pre_frozen) {
+      fr.textContent = "FROZEN · " + (data.pre_frozen_at || "after 09:15");
+      fr.className = "role-when frozen";
+    } else {
+      fr.textContent = data.pre_status || "LIVE PRE · until 09:15";
+      fr.className = "role-when live-pre";
+    }
+  }
   setText(
-    "preGift",
-    data.gift_display || fmt(data.gift) || "—"
+    "preStatusLine",
+    data.pre_status_note ||
+      (data.pre_frozen
+        ? "Locked after open — gap won't keep changing"
+        : "Updating until 09:15 IST")
   );
+
+  setText("preGift", data.gift_display || fmt(data.gift) || "—");
   setText(
-    "preGapPts",
-    data.gap_pts != null
-      ? data.gap_pct != null
-        ? `${fmt(data.gap_pts)} pts (${data.gap_pct >= 0 ? "+" : ""}${(data.gap_pct * 100).toFixed(2)}%)`
-        : fmt(data.gap_pts) + " pts"
-      : "—"
+    "preNiftyPrev",
+    data.nifty_prev_display ||
+      (data.nifty_prev_close != null
+        ? Number(data.nifty_prev_close).toLocaleString("en-IN", {
+            maximumFractionDigits: 2,
+          })
+        : "—")
   );
+
+  const gapDisp =
+    data.gap_display ||
+    (data.gap_pts != null
+      ? `${data.gap_pts >= 0 ? "+" : ""}${Number(data.gap_pts).toFixed(1)} pts`
+      : "—");
+  setText("preGapPts", gapDisp);
   setText(
     "preGapPct",
     data.gap_pct != null
-      ? `${data.gap_pct >= 0 ? "+" : ""}${(Number(data.gap_pct) * 100).toFixed(2)}%`
-      : "—"
+      ? `${data.gap_pct >= 0 ? "+" : ""}${(Number(data.gap_pct) * 100).toFixed(2)}% of prev close`
+      : data.gap_formula || "GIFT − Nifty prev close"
   );
   const gapCat = el("preGapCat");
   if (gapCat) {
-    gapCat.textContent = data.gap_category || "—";
-    gapCat.className = "tag " + (data.gap_category || "");
+    const bias = data.gap_bias || data.gap_category || "—";
+    gapCat.textContent = bias + (data.gap_category ? ` · ${data.gap_category}` : "");
+    const b = String(bias).toUpperCase();
+    gapCat.className =
+      "tag " +
+      (b.includes("UP")
+        ? "gap-up"
+        : b.includes("DOWN")
+          ? "gap-down"
+          : b.includes("FLAT")
+            ? "gap-flat"
+            : data.gap_category || "");
   }
 
-  // Pre playbook = FII conclusion + gap
+  // Strips: compact global read
+  const chip = (label, disp, chg) => {
+    const cls =
+      chg > 0 ? "up" : chg < 0 ? "down" : "";
+    return `<span class="pre-chip ${cls}"><b>${label}</b> ${disp || "—"}</span>`;
+  };
+  const us = el("preUsStrip");
+  if (us) {
+    us.innerHTML =
+      chip("Dow", data.dow_display, data.dow_chg_pct) +
+      chip("S&P", data.spx_display, data.spx_chg_pct) +
+      chip("Nasdaq", data.nasdaq_display, data.nasdaq_chg_pct);
+  }
+  const asia = el("preAsiaStrip");
+  if (asia) {
+    asia.innerHTML =
+      chip("Nikkei", data.nikkei_display, data.nikkei_chg_pct) +
+      chip("Hang Seng", data.hsi_display, data.hsi_chg_pct);
+  }
+  const eu = el("preEuStrip");
+  if (eu) {
+    eu.innerHTML =
+      chip("FTSE", data.ftse_display, data.ftse_chg_pct) +
+      chip("DAX", data.dax_display, data.dax_chg_pct) +
+      chip("CAC", data.cac_display, data.cac_chg_pct) +
+      chip("STOXX50", data.stoxx50_display, data.stoxx50_chg_pct);
+  }
+
+  // Playbook = gap plan first, FII second
   const c =
     data.fii_conclusion ||
     (data.pro_edge && data.pro_edge.fii_conclusion) ||
     {};
   const pb = el("prePlaybook");
   if (pb) {
-    pb.className = "playbook " + (c.color || "neutral");
-    setText("prePlayHead", c.headline || "FII conclusion pending — open Refresh");
+    const bias = data.gap_bias || c.bias || "PLAN";
+    pb.className =
+      "playbook " +
+      (String(bias).includes("UP")
+        ? "bull"
+        : String(bias).includes("DOWN")
+          ? "bear"
+          : c.color || "neutral");
+    setText("prePlayBadge", data.pre_frozen ? "FROZEN PLAN" : "OPEN PLAN");
+    setText(
+      "prePlayHead",
+      data.pre_headline || c.headline || "Refresh for open plan"
+    );
     setText(
       "prePlayBody",
-      (c.plan_pre || c.one_liner || "—") +
-        (data.gap_category
-          ? ` · Gap: ${data.gap_category}`
-          : "")
+      (data.pre_plan || c.plan_pre || c.one_liner || "—") +
+        (c.one_liner && data.pre_plan ? " · FII: " + c.one_liner : "")
     );
   }
+
+  renderEuropeTrack(data.europe_track);
   renderGroupTables("preGroups", data.column_groups, TAB_GROUPS.pre);
+}
+
+function renderEuropeTrack(track) {
+  const prior = el("euPrior");
+  const note = el("euNote");
+  const sum = el("euSummary");
+  const host = el("euWindows");
+  if (!host) return;
+  if (!track || track.ok === false) {
+    host.innerHTML =
+      '<div class="edge-empty">Europe track: refresh after data loads.</div>';
+    return;
+  }
+  if (prior) {
+    prior.textContent = `Prior ~${track.prior_influence_pct ?? 55}% same-direction (moderate vs US overnight)`;
+  }
+  if (note) note.textContent = track.prior_note || "";
+  const s = track.summary || {};
+  if (sum) {
+    const hr =
+      s.hit_rate_pct != null ? `${s.hit_rate_pct}% today` : "— today (windows pending)";
+    sum.innerHTML = `
+      <span><b>EU bias now:</b> ${s.eu_bias_now || "—"}
+        ${s.eu_avg_chg_pct != null ? `(${s.eu_avg_chg_pct > 0 ? "+" : ""}${s.eu_avg_chg_pct}%)` : ""}</span>
+      <span><b>Match rate:</b> ${hr}
+        ${s.windows_scored ? ` · ${s.matches}✓ ${s.misses}✗ / ${s.windows_scored}` : ""}</span>
+      <span class="muted">Windows: 12:30 · 13:30 · 14:30 IST</span>`;
+  }
+  host.innerHTML = "";
+  (track.windows || []).forEach((w) => {
+    const card = document.createElement("div");
+    const st = (w.status || "WAITING").toLowerCase();
+    let mcls = "pending";
+    if (w.match === true) mcls = "match";
+    else if (w.match === false) mcls = "miss";
+    else if (w.match_label && String(w.match_label).includes("NEUTRAL")) mcls = "neutral";
+    card.className = `eu-card ${st} ${mcls}`;
+    const move =
+      w.nifty_move_pts != null
+        ? `${w.nifty_move_pts >= 0 ? "+" : ""}${w.nifty_move_pts} pts`
+        : "—";
+    card.innerHTML = `
+      <div class="eu-card-top">
+        <span class="eu-time">${w.hhmm || ""}</span>
+        <span class="eu-st">${w.status || ""}</span>
+      </div>
+      <div class="eu-label">${w.label || ""}</div>
+      <div class="eu-row"><span>Europe</span><b class="${(w.eu_bias || "").toLowerCase()}">${w.eu_bias || "—"}</b>
+        ${w.eu_avg_chg_pct != null ? `<i>${w.eu_avg_chg_pct > 0 ? "+" : ""}${w.eu_avg_chg_pct}%</i>` : ""}</div>
+      <div class="eu-row"><span>Nifty move</span><b>${move}</b> <i>${w.nifty_bias || ""}</i></div>
+      <div class="eu-match">${w.match_label || w.note || "Waiting for window…"}</div>
+    `;
+    host.appendChild(card);
+  });
 }
 
 function renderLive(data) {

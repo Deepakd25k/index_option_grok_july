@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from app.calendar_util import now_str, trading_status
-from app.config import DAILY_COLUMNS, GAP_MEDIUM_PCT, GAP_SMALL_PCT
+from app.config import DAILY_COLUMNS
 from app.fetchers import (
     fetch_mrchartist,
     fetch_upstox_all,
@@ -17,20 +17,16 @@ from app.fetchers import (
 from app.nse_oi import fetch_latest_participant_oi
 from app.fii_trend import build_week_trend
 from app.advanced_edge import build_pro_edge
+from app.premarket import (
+    apply_freeze_to_snapshot,
+    compute_expected_gap,
+    freeze_or_update_pre,
+    pre_headline_from_gap,
+    update_europe_track,
+)
 from app import storage
 
 log = logging.getLogger(__name__)
-
-
-def gap_category(gap_pct: float | None) -> str:
-    if gap_pct is None:
-        return ""
-    pct = abs(gap_pct) * 100.0
-    if pct < GAP_SMALL_PCT:
-        return "Small"
-    if pct < GAP_MEDIUM_PCT:
-        return "Medium"
-    return "Large"
 
 
 def _col(
@@ -96,6 +92,19 @@ def run_refresh() -> dict[str, Any]:
                 return float(v)
             except (TypeError, ValueError):
                 pass
+        return None
+
+    def pick_prev(key: str) -> float | None:
+        """Previous session close — Yahoo first (reliable candles), then Upstox."""
+        for src in (yahoo, upstox):
+            v = src.get(f"{key}_prev")
+            if v is not None:
+                try:
+                    fv = float(v)
+                    if fv != 0:
+                        return fv
+                except (TypeError, ValueError):
+                    pass
         return None
 
     def pick_chg_pct(key: str) -> float | None:
@@ -205,17 +214,24 @@ def run_refresh() -> dict[str, Any]:
             fut_net = float(fut_l) - float(fut_s)
             fut_ratio = (float(fut_l) / float(fut_s)) if fut_s else None
 
-    # ── Gap ──
-    gap_pts = gap_pct = None
-    gap_cat = ""
-    gap_pts_d = gap_pct_d = None
-    if gift is not None and nifty is not None and nifty != 0:
-        gap_pts = gift - nifty
-        gap_pct = gap_pts / nifty
-        gap_cat = gap_category(gap_pct)
-        sign = "+" if gap_pts > 0 else ""
-        gap_pts_d = f"{gap_pts:,.2f} ({sign}{gap_pct * 100:.2f}%)"
+    # ── Expected Gap = GIFT − Nifty previous close (never live Nifty) ──
+    nifty_prev = pick_prev("nifty")
+    # Pre-open: if Yahoo still shows last bar = prev session, live nifty may equal prev
+    if nifty_prev is None and nifty is not None:
+        # last resort: cannot compute real gap without prev
+        nifty_prev = None
+    gap_info = compute_expected_gap(gift, nifty_prev)
+    gap_pts = gap_info.get("gap_pts")
+    gap_pct = gap_info.get("gap_pct")
+    gap_cat = gap_info.get("gap_category") or ""
+    gap_pts_d = gap_info.get("gap_display")
+    gap_pct_d = None
+    if gap_pct is not None:
+        sign = "+" if gap_pct > 0 else ""
         gap_pct_d = f"{sign}{gap_pct * 100:.2f}%"
+    nifty_prev_d = (
+        f"{nifty_prev:,.2f}" if nifty_prev is not None else "—"
+    )
 
     # FII/DII cash: day-over-day change % vs previous stored session
     fii_d = dii_d = None
@@ -276,13 +292,34 @@ def run_refresh() -> dict[str, Any]:
             fmt="text",
         ),
         # India — value (day chg %)
-        _idx_col("nifty", "Nifty 50 Close", nifty, nifty_chg, nifty_d, "India", "Base for gap + trend reference", "Pre-market + close"),
-        _idx_col("banknifty", "BankNifty Close", bank, bank_chg, bank_d, "India", "Bank-heavy days / which index to trade", "Pre-market + close"),
-        _idx_col("sensex", "Sensex (BSE)", sensex, sensex_chg, sensex_d, "India", "BSE broad market; confirm Nifty bias", "Pre-market + close"),
+        _idx_col("nifty", "Nifty 50 (live/close)", nifty, nifty_chg, nifty_d, "India", "Live/session — NOT used for gap formula", "All day"),
+        _col(
+            "nifty_prev_close",
+            "Nifty Prev Close",
+            nifty_prev,
+            display=nifty_prev_d,
+            group="Gap",
+            why="Base for expected gap — freezes overnight reference",
+            when="Pre-market",
+            src="Yahoo/Upstox prev",
+            fmt="display",
+        ),
+        _idx_col("banknifty", "BankNifty", bank, bank_chg, bank_d, "India", "Bank-heavy days / which index to trade", "Pre-market + live"),
+        _idx_col("sensex", "Sensex (BSE)", sensex, sensex_chg, sensex_d, "India", "BSE broad market; confirm Nifty bias", "Pre-market + live"),
         _idx_col("vix", "India VIX", vix, vix_chg, vix_d, "India", "Low=range day, High=big moves / premium", "Pre-market; spikes on events"),
-        # GIFT + Gap
-        _idx_col("gift", "GIFT Nifty", gift, gift_chg, gift_d, "Gap", "Strongest overnight lead for Nifty open", "Pre-market (early morning)", "Upstox GLOBAL"),
-        _col("gap_pts", "Expected Gap Pts", gap_pts, display=gap_pts_d, group="Gap", why="Open expectation in points (+ % of Nifty)", when="Pre-market after GIFT", src="GIFT−Nifty", fmt="display"),
+        # GIFT + Gap (correct formula)
+        _idx_col("gift", "GIFT Nifty", gift, gift_chg, gift_d, "Gap", "Strongest overnight lead for Nifty open", "Pre until 09:15 then freeze", "Upstox GLOBAL"),
+        _col(
+            "gap_pts",
+            "Expected Gap",
+            gap_pts,
+            display=gap_pts_d,
+            group="Gap",
+            why="GIFT − Nifty prev close → open expectation (does not use live Nifty)",
+            when="Pre-market; freezes after 09:15",
+            src="GIFT−prev",
+            fmt="display",
+        ),
         _col(
             "gap_pct",
             "Expected Gap %",
@@ -290,23 +327,32 @@ def run_refresh() -> dict[str, Any]:
             display=gap_pct_d,
             group="Gap",
             why="ORB / gap-fill rules",
-            when="Pre-market",
+            when="Pre-market; freezes after 09:15",
             src="formula",
             fmt="display",
         ),
-        _col("gap_category", "Gap Category", gap_cat, group="Gap", why="Small/Med/Large → different ORB plan", when="Pre-market", src="formula", fmt="text"),
-        # US
-        _idx_col("dow", "Dow Jones", dow, dow_chg, dow_d, "US", "US risk-on/off overnight bias", "Before India open (US close already done)"),
-        _idx_col("spx", "S&P 500", spx, spx_chg, spx_d, "US", "Global equity beta", "Pre-market"),
+        _col(
+            "gap_category",
+            "Gap Category",
+            gap_cat or gap_info.get("bias"),
+            group="Gap",
+            why="Small/Med/Large + GAP UP/DOWN/FLAT",
+            when="Pre-market",
+            src="formula",
+            fmt="text",
+        ),
+        # US overnight
+        _idx_col("dow", "Dow Jones", dow, dow_chg, dow_d, "US", "US risk-on/off overnight → India open bias", "Before India open"),
+        _idx_col("spx", "S&P 500", spx, spx_chg, spx_d, "US", "Global equity beta overnight", "Pre-market (freeze after open)"),
         _idx_col("nasdaq", "Nasdaq / US Tech", nasdaq, nasdaq_chg, nasdaq_d, "US", "Tech / growth risk appetite", "Pre-market"),
         # Asia
         _idx_col("nikkei", "Nikkei 225", nikkei, nikkei_chg, nikkei_d, "Asia", "Japan risk; Asia open spillover", "Early India morning"),
         _idx_col("hsi", "Hang Seng", hsi, hsi_chg, hsi_d, "Asia", "China/HK risk; FII Asia flow mood", "Early India morning"),
-        # Europe
-        _idx_col("ftse", "FTSE 100 (UK)", ftse, ftse_chg, ftse_d, "Europe", "Europe risk; London close vs Asia open timing", "India morning", "Yahoo"),
-        _idx_col("dax", "DAX (Germany)", dax, dax_chg, dax_d, "Europe", "Eurozone industrial risk appetite", "India morning", "Yahoo"),
-        _idx_col("cac", "CAC 40 (France)", cac, cac_chg, cac_d, "Europe", "Eurozone confirmation with DAX", "India morning", "Yahoo"),
-        _idx_col("stoxx50", "EURO STOXX 50", stoxx50, stoxx50_chg, stoxx50_d, "Europe", "Broad Europe blue-chip bias", "India morning", "Yahoo"),
+        # Europe — midday influence windows (see europe_track)
+        _idx_col("ftse", "FTSE 100 (UK)", ftse, ftse_chg, ftse_d, "Europe", "London risk; open ~12:30–13:30 IST — midday Nifty tone", "12:30–15:30 IST overlap", "Yahoo"),
+        _idx_col("dax", "DAX (Germany)", dax, dax_chg, dax_d, "Europe", "Euro industrial risk — strongest EU lead with FTSE", "12:30 IST open pulse", "Yahoo"),
+        _idx_col("cac", "CAC 40 (France)", cac, cac_chg, cac_d, "Europe", "Eurozone confirm with DAX", "EU open + overlap", "Yahoo"),
+        _idx_col("stoxx50", "EURO STOXX 50", stoxx50, stoxx50_chg, stoxx50_d, "Europe", "Broad Europe blue-chip bias", "EU open + overlap", "Yahoo"),
         # Cash
         _col("fii_cash_net", "FII Cash Net ₹Cr", fii_net, display=fii_d, group="Cash Flow", why="Foreign cash buying/selling pressure", when="Evening provisional; next morning confirmed", src="MrChartist/NSE", fmt="display"),
         _col("dii_cash_net", "DII Cash Net ₹Cr", dii_net, display=dii_d, group="Cash Flow", why="Domestic absorption of FII selling", when="Same as FII cash", src="MrChartist/NSE", fmt="display"),
@@ -393,9 +439,14 @@ def run_refresh() -> dict[str, Any]:
         "gift": gift,
         "gift_chg_pct": gift_chg,
         "gift_display": gift_d,
+        "nifty_prev_close": nifty_prev,
+        "nifty_prev_display": nifty_prev_d,
         "gap_pts": gap_pts,
         "gap_pct": gap_pct,
         "gap_category": gap_cat,
+        "gap_display": gap_pts_d,
+        "gap_formula": gap_info.get("gap_formula"),
+        "gap_bias": gap_info.get("bias"),
         "dow": dow,
         "dow_chg_pct": dow_chg,
         "dow_display": dow_d,
@@ -474,6 +525,7 @@ def run_refresh() -> dict[str, Any]:
     snapshot["errors"] = errors
 
     # ── Pro Edge tab (advanced, clean cards) ──
+    fii_bias_txt = None
     try:
         snapshot["pro_edge"] = build_pro_edge(
             {
@@ -485,6 +537,8 @@ def run_refresh() -> dict[str, Any]:
         )
         # convenience for FII tab
         snapshot["fii_conclusion"] = (snapshot["pro_edge"] or {}).get("fii_conclusion")
+        fc = snapshot.get("fii_conclusion") or {}
+        fii_bias_txt = fc.get("bias") or fc.get("headline")
         sources.append("pro_edge")
         snapshot["sources"] = sources
     except Exception as e:
@@ -498,10 +552,114 @@ def run_refresh() -> dict[str, Any]:
             "active_signals": [],
         }
 
+    # ── Pre-market freeze + headline (gap fixed to GIFT − prev close) ──
+    pre_head, pre_plan = pre_headline_from_gap(gap_info, fii_bias_txt)
+    live_pre = {
+        "gift": gift,
+        "gift_display": gift_d,
+        "gift_chg_pct": gift_chg,
+        "nifty_prev_close": nifty_prev,
+        "nifty_prev_display": nifty_prev_d,
+        "gap_pts": gap_pts,
+        "gap_pct": gap_pct,
+        "gap_category": gap_cat,
+        "gap_display": gap_pts_d,
+        "gap_formula": gap_info.get("gap_formula"),
+        "gap_bias": gap_info.get("bias"),
+        "dow": dow,
+        "dow_display": dow_d,
+        "dow_chg_pct": dow_chg,
+        "spx": spx,
+        "spx_display": spx_d,
+        "spx_chg_pct": spx_chg,
+        "nasdaq": nasdaq,
+        "nasdaq_display": nasdaq_d,
+        "nasdaq_chg_pct": nasdaq_chg,
+        "nikkei": nikkei,
+        "nikkei_display": nikkei_d,
+        "nikkei_chg_pct": nikkei_chg,
+        "hsi": hsi,
+        "hsi_display": hsi_d,
+        "hsi_chg_pct": hsi_chg,
+        "ftse": ftse,
+        "ftse_display": ftse_d,
+        "ftse_chg_pct": ftse_chg,
+        "dax": dax,
+        "dax_display": dax_d,
+        "dax_chg_pct": dax_chg,
+        "cac": cac,
+        "cac_display": cac_d,
+        "cac_chg_pct": cac_chg,
+        "stoxx50": stoxx50,
+        "stoxx50_display": stoxx50_d,
+        "stoxx50_chg_pct": stoxx50_chg,
+        "fii_cash_net": fii_net,
+        "dii_cash_net": dii_net,
+        "pre_headline": pre_head,
+        "pre_plan": pre_plan,
+    }
+    try:
+        locked = freeze_or_update_pre(ymd, live_pre, bool(trading["is_trading"]))
+        snapshot = apply_freeze_to_snapshot(snapshot, locked)
+        # Re-sync gap columns display from freeze if frozen
+        if locked.get("frozen"):
+            for col in snapshot.get("columns") or []:
+                k = col.get("key")
+                if k in locked and locked[k] is not None:
+                    if k in (
+                        "gap_pts",
+                        "gap_pct",
+                        "gift",
+                        "nifty_prev_close",
+                        "gap_category",
+                    ):
+                        col["value"] = locked[k]
+                    if k == "gap_pts" and locked.get("gap_display"):
+                        col["display"] = locked["gap_display"]
+                    if k == "gift" and locked.get("gift_display"):
+                        col["display"] = locked["gift_display"]
+                    if k == "nifty_prev_close" and locked.get("nifty_prev_display"):
+                        col["display"] = locked["nifty_prev_display"]
+            snapshot["column_groups"] = _group_columns(snapshot["columns"])
+        sources.append("premarket_lock")
+    except Exception as e:
+        errors.append(f"premarket:{e}")
+        log.exception("premarket")
+        snapshot["pre_headline"] = pre_head
+        snapshot["pre_plan"] = pre_plan
+        snapshot["pre_status"] = "LIVE PRE"
+        snapshot["pre_frozen"] = False
+
+    # ── Europe → Nifty influence track (midday windows) ──
+    try:
+        snapshot["europe_track"] = update_europe_track(
+            ymd,
+            nifty=nifty,
+            ftse_chg=ftse_chg,
+            dax_chg=dax_chg,
+            cac_chg=cac_chg,
+            stoxx_chg=stoxx50_chg,
+            is_trading=bool(trading["is_trading"]),
+        )
+        sources.append("europe_track")
+    except Exception as e:
+        errors.append(f"europe_track:{e}")
+        log.exception("europe_track")
+        snapshot["europe_track"] = {"ok": False, "error": str(e)}
+
+    snapshot["sources"] = sources
+    snapshot["errors"] = errors
+    snapshot["gap_info"] = gap_info
+
     storage.save_latest(snapshot)
     # history without huge nested participants every day? keep slim
     hist = {k: row[k] for k in DAILY_COLUMNS if k in row}
     hist["errors"] = errors
+    hist["nifty_prev_close"] = nifty_prev
+    hist["gap_bias"] = gap_info.get("bias")
+    hist["pre_frozen"] = snapshot.get("pre_frozen")
+    eu = snapshot.get("europe_track") or {}
+    hist["europe_hit_rate"] = (eu.get("summary") or {}).get("hit_rate_pct")
     storage.upsert_daily(hist)
     return snapshot
 
